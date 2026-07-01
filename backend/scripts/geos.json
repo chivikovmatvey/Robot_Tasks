@@ -1,0 +1,916 @@
+{
+  "_comment": "Справочник ГЕО. Добавляй свои строки по образцу.",
+  "_format": "КОД: { currency, lang, lang_html, country_name }",
+  "BG": {
+    "currency": "BGN",
+    "lang": "BG",
+    "lang_html": "bg",
+    "country_name": "България",
+    "geo_words": [
+      "България",
+      "Bulgaria",
+      "български",
+      "bulgarski",
+      "София",
+      "Sofia"
+    ]
+  },
+  "RO": {
+    "currency": "RON",
+    "lang": "RO",
+    "lang_html": "ro",
+    "country_name": "România",
+    "geo_words": [
+      "România",
+      "Romania",
+      "român",
+      "români",
+      "română",
+      "București",
+      "Bucharest"
+    ]
+  },
+  "HU": {
+    "currency": "HUF",
+    "lang": "HU",
+    "lang_html": "hu",
+    "country_name": "Magyarország",
+    "geo_words": [
+      "Magyarország",
+      "Hungary",
+      "magyar",
+      "Budapest"
+    ]
+  },
+  "NI": {
+    "currency": "NIO",
+    "lang": "ES",
+    "lang_html": "ES",
+    "country_name": "Nicaragua",
+    "geo_words": [
+      "Nicaragua",
+      "Managua"
+    ]
+  },
+  "PL": {
+    "currency": "PLN",
+    "lang": "PL",
+    "lang_html": "pl",
+    "country_name": "Polska",
+    "geo_words": [
+      "Polska",
+      "Poland",
+      "polski",
+      "polskie",
+      "Warszawa",
+      "Warsaw"
+    ]
+  },
+  "CZ": {
+    "currency": "CZK",
+    "lang": "CS",
+    "lang_html": "cs",
+    "country_name": "Česká republika",
+    "geo_words": [
+      "Česká republika",
+      "Czech",
+      "český",
+      "české",
+      "Praha",
+      "Prague"
+    ]
+  },
+  "SK": {
+    "currency": "EUR",
+    "lang": "SK",
+    "lang_html": "sk",
+    "country_name": "Slovensko"
+  },
+  "SI": {
+    "currency": "EUR",
+    "lang": "SL",
+    "lang_html": "sl",
+    "country_name": "Slovenija"
+  },
+  "HR": {
+    "currency": "EUR",
+    "lang": "HR",
+    "lang_html": "hr",
+    "country_name": "Hrvatska"
+  },
+  "RS": {
+    "currency": "RSD",
+    "lang": "SR",
+    "lang_html": "sr",
+    "country_name": "Srbija"
+  },
+  "BA": {
+    "currency": "BAM",
+    "lang": "BS",
+    "lang_html": "bs",
+    "country_name": "Bosna i Hercegovina"
+  },
+  "MK": {
+    "currency": "MKD",
+    "lang": "MK",
+    "lang_html": "mk",
+    "country_name": "Северна Македонија"
+  },
+  "AL": {
+    "currency": "ALL",
+    "lang": "SQ",
+    "lang_html": "sq",
+    "country_name": "Shqipëria"
+  },
+  "LV": {
+    "currency": "EUR",
+    "lang": "LV",
+    "lang_html": "lv",
+    "country_name": "Latvija"
+  },
+  "BY": {
+    "currency": "BYN",
+    "lang": "BE",
+    "lang_html": "be",
+    "country_name": "Беларусь"
+  },
+  "RU": {
+    "currency": "RUB",
+    "lang": "RU",
+    "lang_html": "ru",
+    "country_name": "Россия",
+    "geo_words": [
+      "Россия",
+      "Russia",
+      "российский",
+      "русский",
+      "Москва",
+      "Moscow"
+    ]
+  },
+  "KZ": {
+    "currency": "KZT",
+    "lang": "RU",
+    "lang_html": "ru",
+    "country_name": "Қазақстан",
+    "geo_words": [
+      "Казахстан",
+      "Kazakhstan",
+      "казахский",
+      "kazakh",
+      "Алматы",
+      "Almaty",
+      "Астана"
+    ]
+  },
+  "UZ": {
+    "currency": "UZS",
+    "lang": "UZ",
+    "lang_html": "uz",
+    "country_name": "Oʻzbekiston"
+  },
+  "AZ": {
+    "currency": "AZN",
+    "lang": "AZ",
+    "lang_html": "az",
+    "country_name": "Azərbaycan"
+  },
+  "AM": {
+    "currency": "AMD",
+    "lang": "HY",
+    "lang_html": "hy",
+    "country_name": "Հայաստան"
+  },
+  "GE": {
+    "currency": "GEL",
+    "lang": "KA",
+    "lang_html": "ka",
+    "country_name": "საქართველო"
+  },
+  "MD": {
+    "currency": "MDL",
+    "lang": "RO",
+    "lang_html": "ro",
+    "country_name": "Moldova"
+  },
+  "TJ": {
+    "currency": "TJS",
+    "lang": "TG",
+    "lang_html": "tg",
+    "country_name": "Тоҷикистон"
+  },
+  "TM": {
+    "currency": "TMT",
+    "lang": "TK",
+    "lang_html": "tk",
+    "country_name": "Türkmenistan"
+  },
+  "KG": {
+    "currency": "KGS",
+    "lang": "KY",
+    "lang_html": "ky",
+    "country_name": "Кыргызстан"
+  },
+  "ES": {
+    "currency": "EUR",
+    "lang": "ES",
+    "lang_html": "es",
+    "country_name": "España",
+    "geo_words": [
+      "España",
+      "Spain",
+      "español",
+      "española",
+      "Madrid",
+      "Barcelona"
+    ]
+  },
+  "PT": {
+    "currency": "EUR",
+    "lang": "PT",
+    "lang_html": "pt",
+    "country_name": "Portugal",
+    "geo_words": [
+      "Portugal",
+      "português",
+      "portuguesa",
+      "Lisboa",
+      "Lisbon"
+    ]
+  },
+  "IT": {
+    "currency": "EUR",
+    "lang": "IT",
+    "lang_html": "it",
+    "country_name": "Italia",
+    "geo_words": [
+      "Italia",
+      "Italy",
+      "italiano",
+      "italiana",
+      "Roma",
+      "Rome"
+    ]
+  },
+  "CH": {
+    "currency": "EUR",
+    "lang": "DE",
+    "lang_html": "de",
+    "country_name": "Schweiz"
+  },
+  "FR": {
+    "currency": "EUR",
+    "lang": "FR",
+    "lang_html": "fr",
+    "country_name": "France",
+    "geo_words": [
+      "France",
+      "français",
+      "française",
+      "Paris"
+    ]
+  },
+  "DE": {
+    "currency": "EUR",
+    "lang": "DE",
+    "lang_html": "de",
+    "country_name": "Deutschland",
+    "geo_words": [
+      "Deutschland",
+      "Germany",
+      "deutsch",
+      "deutsche",
+      "Berlin"
+    ]
+  },
+  "AT": {
+    "currency": "EUR",
+    "lang": "DE",
+    "lang_html": "de",
+    "country_name": "Österreich"
+  },
+  "NL": {
+    "currency": "EUR",
+    "lang": "NL",
+    "lang_html": "nl",
+    "country_name": "Nederland"
+  },
+  "BE": {
+    "currency": "EUR",
+    "lang": "FR",
+    "lang_html": "fr",
+    "country_name": "Belgique"
+  },
+  "GR": {
+    "currency": "EUR",
+    "lang": "EL",
+    "lang_html": "el",
+    "country_name": "Ελλάδα"
+  },
+  "GB": {
+    "currency": "GBP",
+    "lang": "EN",
+    "lang_html": "en",
+    "country_name": "United Kingdom",
+    "geo_words": [
+      "United Kingdom",
+      "England",
+      "British",
+      "London"
+    ]
+  },
+  "SE": {
+    "currency": "KR",
+    "lang": "SV",
+    "lang_html": "sv",
+    "country_name": "Sverige"
+  },
+  "NO": {
+    "currency": "NOK",
+    "lang": "NO",
+    "lang_html": "no",
+    "country_name": "Norge"
+  },
+  "DK": {
+    "currency": "DKK",
+    "lang": "DA",
+    "lang_html": "da",
+    "country_name": "Danmark"
+  },
+  "FI": {
+    "currency": "EUR",
+    "lang": "FI",
+    "lang_html": "fi",
+    "country_name": "Suomi"
+  },
+  "TR": {
+    "currency": "TRY",
+    "lang": "TR",
+    "lang_html": "tr",
+    "country_name": "Türkiye",
+    "geo_words": [
+      "Türkiye",
+      "Turkey",
+      "Türk",
+      "türkiye",
+      "Ankara",
+      "İstanbul",
+      "Istanbul"
+    ]
+  },
+  "IL": {
+    "currency": "ILS",
+    "lang": "HE",
+    "lang_html": "he",
+    "country_name": "ישראל"
+  },
+  "SA": {
+    "currency": "SAR",
+    "lang": "AR",
+    "lang_html": "ar",
+    "country_name": "المملكة العربية السعودية",
+    "geo_words": [
+      "Saudi Arabia",
+      "السعودية",
+      "Riyadh",
+      "الرياض"
+    ]
+  },
+  "AE": {
+    "currency": "AED",
+    "lang": "AR",
+    "lang_html": "ar",
+    "country_name": "الإمارات العربية المتحدة",
+    "geo_words": [
+      "الإمارات",
+      "UAE",
+      "Dubai",
+      "دبي",
+      "Abu Dhabi"
+    ]
+  },
+  "EG": {
+    "currency": "EGP",
+    "lang": "AR",
+    "lang_html": "ar",
+    "country_name": "مصر",
+    "geo_words": [
+      "Egypt",
+      "Egyptian",
+      "مصر",
+      "Cairo",
+      "القاهرة"
+    ]
+  },
+  "LY": {
+    "currency": "LYD",
+    "lang": "AR",
+    "lang_html": "ar",
+    "country_name": "ليبيا"
+  },
+  "IQ": {
+    "currency": "IQD",
+    "lang": "AR",
+    "lang_html": "ar",
+    "country_name": "العراق"
+  },
+  "MA": {
+    "currency": "MAD",
+    "lang": "AR",
+    "lang_html": "ar",
+    "country_name": "المغرب",
+    "geo_words": [
+      "Maroc",
+      "Morocco",
+      "Marocain",
+      "المغرب",
+      "Casablanca",
+      "الدار البيضاء"
+    ]
+  },
+  "DZ": {
+    "currency": "DZD",
+    "lang": "AR",
+    "lang_html": "ar",
+    "country_name": "الجزائر"
+  },
+  "LB": {
+    "currency": "USD",
+    "lang": "AR",
+    "lang_html": "ar",
+    "country_name": "لبنان"
+  },
+  "BH": {
+    "currency": "USD",
+    "lang": "AR",
+    "lang_html": "ar",
+    "country_name": "البحرين"
+  },
+  "LT": {
+    "currency": "EUR",
+    "lang": "LT",
+    "lang_html": "lt",
+    "country_name": "Lietuva"
+  },
+  "EE": {
+    "currency": "EUR",
+    "lang": "ET",
+    "lang_html": "et",
+    "country_name": "Eesti"
+  },
+  "QA": {
+    "currency": "QAR",
+    "lang": "AR",
+    "lang_html": "ar",
+    "country_name": "Qatar"
+  },
+  "OM": {
+    "currency": "OMR",
+    "lang": "AR",
+    "lang_html": "ar",
+    "country_name": "Oman"
+  },
+  "KW": {
+    "currency": "KWD",
+    "lang": "AR",
+    "lang_html": "ar",
+    "country_name": "Kuwait"
+  },
+  "PK": {
+    "currency": "PKR",
+    "lang": "UR",
+    "lang_html": "ur",
+    "country_name": "پاکستان",
+    "geo_words": [
+      "Pakistan",
+      "Pakistani",
+      "پاکستان",
+      "Karachi",
+      "Lahore"
+    ]
+  },
+  "IN": {
+    "currency": "INR",
+    "lang": "HI",
+    "lang_html": "hi",
+    "country_name": "भारत",
+    "geo_words": [
+      "India",
+      "Indian",
+      "भारत",
+      "Mumbai",
+      "Delhi",
+      "Bangalore"
+    ]
+  },
+  "BD": {
+    "currency": "BDT",
+    "lang": "BN",
+    "lang_html": "bn",
+    "country_name": "বাংলাদেশ"
+  },
+  "LK": {
+    "currency": "LKR",
+    "lang": "SI",
+    "lang_html": "si",
+    "country_name": "ශ්‍රී ලංකාව"
+  },
+  "ID": {
+    "currency": "IDR",
+    "lang": "ID",
+    "lang_html": "id",
+    "country_name": "Indonesia",
+    "geo_words": [
+      "Indonesia",
+      "Indonesian",
+      "Jakarta"
+    ]
+  },
+  "TH": {
+    "currency": "THB",
+    "lang": "TH",
+    "lang_html": "th",
+    "country_name": "ประเทศไทย",
+    "geo_words": [
+      "Thailand",
+      "Thai",
+      "ประเทศไทย",
+      "Bangkok",
+      "กรุงเทพ"
+    ]
+  },
+  "VN": {
+    "currency": "VND",
+    "lang": "VI",
+    "lang_html": "vi",
+    "country_name": "Việt Nam",
+    "geo_words": [
+      "Việt Nam",
+      "Vietnam",
+      "Vietnamese",
+      "Hà Nội",
+      "Hanoi"
+    ]
+  },
+  "PH": {
+    "currency": "PHP",
+    "lang": "TL",
+    "lang_html": "tl",
+    "country_name": "Pilipinas",
+    "geo_words": [
+      "Philippines",
+      "Filipino",
+      "Filipina",
+      "Manila"
+    ]
+  },
+  "MY": {
+    "currency": "MYR",
+    "lang": "MS",
+    "lang_html": "ms",
+    "country_name": "Malaysia",
+    "geo_words": [
+      "Malaysia",
+      "Malaysian",
+      "Kuala Lumpur"
+    ]
+  },
+  "KH": {
+    "currency": "KHR",
+    "lang": "KM",
+    "lang_html": "km",
+    "country_name": "កម្ពុជា"
+  },
+  "MX": {
+    "currency": "MXN",
+    "lang": "ES",
+    "lang_html": "es",
+    "country_name": "México",
+    "geo_words": [
+      "México",
+      "Mexico",
+      "mexicano",
+      "mexicanos",
+      "mexicana",
+      "mexicanas",
+      "Ciudad de México",
+      "CDMX"
+    ]
+  },
+  "CO": {
+    "currency": "COP",
+    "lang": "ES",
+    "lang_html": "es",
+    "country_name": "Colombia",
+    "geo_words": [
+      "Colombia",
+      "colombiano",
+      "colombianos",
+      "colombiana",
+      "colombianas",
+      "Bogotá",
+      "Bogota"
+    ]
+  },
+  "DO": {
+    "currency": "DOP",
+    "lang": "ES",
+    "lang_html": "es",
+    "country_name": "República Dominicana",
+    "geo_words": [
+      "República Dominicana",
+      "dominicano",
+      "dominicanos",
+      "dominicana",
+      "Santo Domingo"
+    ]
+  },
+  "PE": {
+    "currency": "PEN",
+    "lang": "ES",
+    "lang_html": "es",
+    "country_name": "Perú",
+    "geo_words": [
+      "Perú",
+      "Peru",
+      "peruano",
+      "peruanos",
+      "peruana",
+      "peruanas",
+      "Lima"
+    ]
+  },
+  "AR": {
+    "currency": "ARS",
+    "lang": "ES",
+    "lang_html": "es",
+    "country_name": "Argentina",
+    "geo_words": [
+      "Argentina",
+      "argentino",
+      "argentinos",
+      "argentina",
+      "argentinas",
+      "Buenos Aires"
+    ]
+  },
+  "CL": {
+    "currency": "CLP",
+    "lang": "ES",
+    "lang_html": "es",
+    "country_name": "Chile",
+    "geo_words": [
+      "Chile",
+      "chileno",
+      "chilenos",
+      "chilena",
+      "chilenas",
+      "Santiago"
+    ]
+  },
+  "EC": {
+    "currency": "USD",
+    "lang": "ES",
+    "lang_html": "es",
+    "country_name": "Ecuador",
+    "geo_words": [
+      "Ecuador",
+      "ecuatoriano",
+      "ecuatorianos",
+      "ecuatoriana",
+      "ecuatorianas",
+      "Quito"
+    ]
+  },
+  "HN": {
+    "currency": "L",
+    "lang": "ES",
+    "lang_html": "es",
+    "country_name": "Honduras",
+    "geo_words": [
+      "Honduras",
+      "hondureño",
+      "hondureños",
+      "hondureña",
+      "Tegucigalpa"
+    ]
+  },
+  "GT": {
+    "currency": "Q",
+    "lang": "ES",
+    "lang_html": "es",
+    "country_name": "Guatemala",
+    "geo_words": [
+      "Guatemala",
+      "guatemalteco",
+      "guatemaltecos",
+      "guatemalteca",
+      "Ciudad de Guatemala"
+    ]
+  },
+  "BO": {
+    "currency": "BOB",
+    "lang": "ES",
+    "lang_html": "es",
+    "country_name": "Bolivia",
+    "geo_words": [
+      "Bolivia",
+      "boliviano",
+      "bolivianos",
+      "boliviana",
+      "bolivianas",
+      "La Paz"
+    ]
+  },
+  "SV": {
+    "currency": "$",
+    "lang": "ES",
+    "lang_html": "es",
+    "country_name": "Salvador",
+    "geo_words": [
+      "El Salvador",
+      "salvadoreño",
+      "salvadoreños",
+      "salvadoreña",
+      "San Salvador"
+    ]
+  },
+  "BR": {
+    "currency": "BRL",
+    "lang": "PT",
+    "lang_html": "pt",
+    "country_name": "Brasil"
+  },
+  "PA": {
+    "currency": "PAB",
+    "lang": "ES",
+    "lang_html": "es",
+    "country_name": "Panama",
+    "geo_words": [
+      "Panamá",
+      "Panama",
+      "panameño",
+      "panameños",
+      "panameña",
+      "Ciudad de Panamá"
+    ]
+  },
+  "CI": {
+    "currency": "XOF",
+    "lang": "FR",
+    "lang_html": "fr",
+    "country_name": "Cote d'Ivoire"
+  },
+  "PR": {
+    "currency": "USD",
+    "lang": "ES",
+    "lang_html": "es",
+    "country_name": "Puerto Rico"
+  },
+  "PY": {
+    "currency": "PYG",
+    "lang": "ES",
+    "lang_html": "es",
+    "country_name": "Paraguay",
+    "geo_words": [
+      "Paraguay",
+      "paraguayo",
+      "paraguayos",
+      "paraguaya",
+      "paraguayas",
+      "Asunción"
+    ]
+  },
+  "UY": {
+    "currency": "UYU",
+    "lang": "ES",
+    "lang_html": "es",
+    "country_name": "Uruguay",
+    "geo_words": [
+      "Uruguay",
+      "uruguayo",
+      "uruguayos",
+      "uruguaya",
+      "uruguayas",
+      "Montevideo"
+    ]
+  },
+  "NG": {
+    "currency": "NGN",
+    "lang": "EN",
+    "lang_html": "en",
+    "country_name": "Nigeria",
+    "geo_words": [
+      "Nigeria",
+      "Nigerian",
+      "Lagos",
+      "Abuja"
+    ]
+  },
+  "KE": {
+    "currency": "KES",
+    "lang": "SW",
+    "lang_html": "sw",
+    "country_name": "Kenya",
+    "geo_words": [
+      "Kenya",
+      "Kenyan",
+      "Nairobi"
+    ]
+  },
+  "TZ": {
+    "currency": "TZS",
+    "lang": "SW",
+    "lang_html": "sw",
+    "country_name": "Tanzania"
+  },
+  "UG": {
+    "currency": "UGX",
+    "lang": "EN",
+    "lang_html": "en",
+    "country_name": "Uganda"
+  },
+  "GH": {
+    "currency": "GHS",
+    "lang": "EN",
+    "lang_html": "en",
+    "country_name": "Ghana",
+    "geo_words": [
+      "Ghana",
+      "Ghanaian",
+      "Accra"
+    ]
+  },
+  "CM": {
+    "currency": "XAF",
+    "lang": "FR",
+    "lang_html": "fr",
+    "country_name": "Cameroon"
+  },
+  "AO": {
+    "currency": "AOA",
+    "lang": "PT",
+    "lang_html": "pt",
+    "country_name": "Angola"
+  },
+  "ZA": {
+    "currency": "ZAR",
+    "lang": "EN",
+    "lang_html": "en",
+    "country_name": "South Africa",
+    "geo_words": [
+      "South Africa",
+      "Johannesburg",
+      "Cape Town",
+      "Durban"
+    ]
+  },
+  "ET": {
+    "currency": "ETB",
+    "lang": "AM",
+    "lang_html": "am",
+    "country_name": "ኢትዮጵያ"
+  },
+  "ML": {
+    "currency": "XOF",
+    "lang": "FR",
+    "lang_html": "fr",
+    "country_name": "Mali"
+  },
+  "GN": {
+    "currency": "GNF",
+    "lang": "FR",
+    "lang_html": "fr",
+    "country_name": "Guinée"
+  },
+  "US": {
+    "currency": "USD",
+    "lang": "EN",
+    "lang_html": "en",
+    "country_name": "United States"
+  },
+  "CA": {
+    "currency": "CAD",
+    "lang": "EN",
+    "lang_html": "en",
+    "country_name": "Canada"
+  },
+  "AU": {
+    "currency": "AUD",
+    "lang": "EN",
+    "lang_html": "en",
+    "country_name": "Australia"
+  },
+  "CR": {
+    "currency": "₡",
+    "lang": "ES",
+    "lang_html": "es",
+    "country_name": "Costa-Rico",
+    "geo_words": [
+      "Costa Rica",
+      "costarricense",
+      "costarricenses",
+      "San José"
+    ]
+  }
+}

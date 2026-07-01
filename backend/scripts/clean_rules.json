@@ -1,0 +1,730 @@
+{
+  "_comment": "Правила очистки. Добавляй новые строки по мере появления новых ПП.",
+  "remove_blocks": [
+    {
+      "label": "Yandex Metrika (комментарий)",
+      "start": "<!-- Yandex.Metrika counter -->",
+      "end": "<!-- /Yandex.Metrika counter -->"
+    },
+    {
+      "label": "Google Tag Manager head",
+      "start": "<!-- Google Tag Manager -->",
+      "end": "<!-- End Google Tag Manager -->"
+    },
+    {
+      "label": "Google Tag Manager noscript",
+      "start": "<!-- Google Tag Manager (noscript) -->",
+      "end": "<!-- End Google Tag Manager (noscript) -->"
+    },
+    {
+      "label": "Facebook Pixel",
+      "start": "<!-- Facebook Pixel Code -->",
+      "end": "<!-- End Facebook Pixel Code -->"
+    },
+    {
+      "label": "TikTok Pixel",
+      "start": "<!-- TikTok Pixel Code -->",
+      "end": "<!-- End TikTok Pixel Code -->"
+    },
+    {
+      "label": "M1 popup-m1-politicians 1",
+      "start": "<!-- popup-m1-politicians-container -->",
+      "end": "<!-- popup-m1-politicians-container -->"
+    },
+    {
+      "label": "M1 popup-m1-politicians 2",
+      "start": "<!-- popup-m1-politicians-container -->",
+      "end": "<!-- /popup-m1-politicians -->"
+    },
+    {
+      "label": "curl redirect block (Fuck PHP)",
+      "start": "error_reporting( 0 ); // Fuck PHP 8.2+ and all the fucking hipsters",
+      "end": "curl_close( $curl );"
+    },
+    {
+      "label": "curl redirect block ($curl leftover)",
+      "start": "error_reporting( 0 ); // Fuck PHP 8.2+ and all the fucking hipsters",
+      "end": "$curl = ?>"
+    },
+    {
+      "label": "Domonetka back.js block",
+      "start": "<!----Domonetka---->",
+      "end": "<!----Domonetka---->"
+    }
+  ],
+  "remove_html_blocks": [
+    {
+      "_comment": "Удаляет HTML блоки по start/end маркерам (div, form и т.д.)",
+      "label": "M1 overlay popup",
+      "start": "<div id=\"overlay-popup-m1\">",
+      "end": "</div>\n    </div>\n    </div>\n    </div>"
+    },
+    {
+      "label": "M1 m1-form div",
+      "start": "<div id=\"m1-form\"",
+      "end": "</div>\n    </div>\n    </div>"
+    },
+    {
+      "label": "M1 popup-m1-politicians agreement",
+      "start": "<!-- popup-m1-politicians-container -->\n    <div id=\"popup-m1-politicians-container\" class=\"_popup\" style=\"display:none;\" data-modalname=\"agreement\">",
+      "end": "<!-- popup-m1-politicians-container -->"
+    },
+    {
+      "label": "M1 popup-m1-politicians politics",
+      "start": "<!-- popup-m1-politicians-container -->\n    <div id=\"popup-m1-politicians-container\" class=\"_popup\" style=\"display: none\" data-modalname=\"politics\">",
+      "end": "<!-- popup-m1-politicians-container -->"
+    },
+    {
+      "label": "M1 popup-m1-politicians returnPolicy",
+      "start": "<div id=\"popup-m1-politicians-container\" class=\"_popup\" style=\"display: none\" data-modalname=\"returnPolicy\">",
+      "end": "</div>\n    </div>"
+    }
+  ],
+  "remove_scripts_with": [
+    {
+      "label": "Yandex Metrika inline",
+      "contains": "mc.yandex.ru/metrika"
+    },
+    {
+      "label": "Yandex Metrika cdn",
+      "contains": "yandex-metrica-watch/watch.js"
+    },
+    {
+      "label": "Yandex sendMetrics",
+      "contains": "sendMetrics"
+    },
+    {
+      "label": "smrtdirect back",
+      "contains": "cdn.smrtdirect.com"
+    },
+    {
+      "label": "smrtdirect showcaseOnBack",
+      "contains": "showcaseOnBack"
+    },
+    {
+      "label": "KMA country var",
+      "contains": "var country ="
+    },
+    {
+      "label": "KMA validateAndSendForm",
+      "contains": "KMA.validateAndSendForm"
+    },
+    {
+      "label": "KMA nothingimportant",
+      "contains": "nothingimportant.pro"
+    },
+    {
+      "label": "KMA cdnkma",
+      "contains": "cdnkma.biz"
+    },
+    {
+      "label": "KMA country_list RU",
+      "contains": "country_list['RU']"
+    },
+    {
+      "label": "M1 m1_product_id",
+      "contains": "var m1_product_id"
+    },
+    {
+      "label": "M1 sendData function",
+      "contains": "//api.m1.top/send_order/"
+    },
+    {
+      "label": "M1 QueryString",
+      "contains": "//api.m1.top/send_stat_order/"
+    },
+    {
+      "label": "M1 webmaster_id var",
+      "contains": "var webmaster_id"
+    },
+    {
+      "label": "M1 phonePrefix",
+      "contains": "var phonePrefix"
+    },
+    {
+      "label": "M1 comebackerFormId",
+      "contains": "var comebackerFormId"
+    },
+    {
+      "label": "M1 popup click handler",
+      "contains": "_popup-link"
+    },
+    {
+      "label": "M1 popup-m1 init",
+      "contains": "popup-m1-politicians-container"
+    },
+    {
+      "label": "Ever geolocation script",
+      "contains": "geolocation-db.com/json"
+    },
+    {
+      "label": "Ever window.lang",
+      "contains": "window.is_downloaded_from_dashboard"
+    },
+    {
+      "label": "Ever _locations",
+      "contains": "window._locations"
+    },
+    {
+      "label": "Acrum extra",
+      "contains": "var acrum_extra"
+    },
+    {
+      "label": "Acrum lang_locale",
+      "contains": "var lang_locale"
+    },
+    {
+      "label": "Acrum ccode",
+      "contains": "var ccode ="
+    },
+    {
+      "label": "Acrum adc_clearFooter",
+      "contains": "adc_clearFooter"
+    },
+    {
+      "label": "Acrum leadprofit init",
+      "contains": "leadprofit({"
+    },
+    {
+      "label": "back.js src",
+      "contains": "back.js"
+    },
+    {
+      "label": "vitBack call",
+      "contains": "vitBack("
+    },
+    {
+      "label": "+91 phone script",
+      "contains": "var prefix = '+91 '"
+    },
+    {
+      "label": "+91 phone script 2",
+      "contains": "var prefix = \"+91 \""
+    }
+  ],
+  "remove_lines_with": [
+    {
+      "label": "Yandex watch noscript",
+      "contains": "mc.yandex.ru/watch"
+    },
+    {
+      "label": "tooltips.js",
+      "contains": "js/tooltips.js"
+    },
+    {
+      "label": "smrtdirect src",
+      "contains": "cdn.smrtdirect.com"
+    },
+    {
+      "label": "adsssite showcase",
+      "contains": "adsssite.com/showcase"
+    },
+    {
+      "label": "KMA custom-functions",
+      "contains": "custom-functions"
+    },
+    {
+      "label": "Cloudflare email decode",
+      "contains": "cloudflare-static/email-decode"
+    },
+    {
+      "label": "M1 lib.js",
+      "contains": "assets_pages/js/lib.js"
+    },
+    {
+      "label": "M1 yasoblock",
+      "contains": "assets_pages/js/yasoblock"
+    },
+    {
+      "label": "M1 plugins.js",
+      "contains": "assets_pages/js/plugins.js"
+    },
+    {
+      "label": "M1 copyrights.js",
+      "contains": "assets_pages/js/copyrights.js"
+    },
+    {
+      "label": "M1 phonePrefix.js",
+      "contains": "assets_pages/js/phonePrefix.js"
+    },
+    {
+      "label": "M1 popup-m1.js",
+      "contains": "assets_pages/js/popup-m1.js"
+    },
+    {
+      "label": "M1 m1ref.js",
+      "contains": "assets_pages/js/m1ref.js"
+    },
+    {
+      "label": "M1 roboto font",
+      "contains": "assets_pages/fonts/roboto.css"
+    },
+    {
+      "label": "M1 popup-m1-style.css",
+      "contains": "assets_pages/css/popup-m1-style.css"
+    },
+    {
+      "label": "M1 enhancer_all_style.css",
+      "contains": "assets_pages/css/enhancer_all_style.css"
+    },
+    {
+      "label": "M1 popup.css",
+      "contains": "assets_pages/css/popup.css"
+    },
+    {
+      "label": "script_land.js",
+      "contains": "script_land.js"
+    },
+    {
+      "label": "tl-validator.js",
+      "contains": "tl-validator.js"
+    },
+    {
+      "label": "phoneMask.js",
+      "contains": "js/phoneMask.js"
+    },
+    {
+      "label": "Acrum require onepage",
+      "contains": "require('onepage.php')"
+    },
+    {
+      "label": "Acrum oldPriceHtml",
+      "contains": "$oldPriceHtml"
+    },
+    {
+      "label": "Acrum newPriceHtml",
+      "contains": "$newPriceHtml"
+    },
+    {
+      "label": "Acrum currencyDisplayHtml",
+      "contains": "$currencyDisplayHtml"
+    },
+    {
+      "label": "Acrum countryDefault",
+      "contains": "countryDefault()"
+    },
+    {
+      "label": "Acrum jquery-cookie",
+      "contains": "jquery-cookie"
+    },
+    {
+      "label": "Acrum jquery-url-parser",
+      "contains": "jquery-url-parser"
+    },
+    {
+      "label": "Acrum jquery.inputmask",
+      "contains": "jquery.inputmask"
+    },
+    {
+      "label": "Acrum leadprofit.js",
+      "contains": "leadprofit.js"
+    },
+    {
+      "label": "Acrum price.js",
+      "contains": "price.js"
+    },
+    {
+      "label": "be.js",
+      "contains": "js/be.js"
+    },
+    {
+      "label": "countries.js",
+      "contains": "js/countries.js"
+    },
+    {
+      "label": "cpaland.js",
+      "contains": "js/cpaland.js"
+    },
+    {
+      "label": "translater.js",
+      "contains": "js/translater.js"
+    },
+    {
+      "label": "alarm.js",
+      "contains": "js/alarm.js"
+    },
+    {
+      "label": "ywbackfix.js src",
+      "contains": "ywbackfix.js"
+    },
+    {
+      "label": "curl leftover $curl =",
+      "contains": "$curl = "
+    },
+    {
+      "label": "curl_exec line",
+      "contains": "curl_exec("
+    },
+    {
+      "label": "curl_close line",
+      "contains": "curl_close("
+    },
+    {
+      "label": "curl_setopt line",
+      "contains": "curl_setopt("
+    },
+    {
+      "label": "HTTP_CF_CONNECTING_IP",
+      "contains": "HTTP_CF_CONNECTING_IP"
+    },
+    {
+      "label": "HTTP_X_FORWARDED_FOR",
+      "contains": "HTTP_X_FORWARDED_FOR"
+    },
+    {
+      "label": "_clienthost check",
+      "contains": "_clienthost"
+    },
+    {
+      "label": "_clientip check",
+      "contains": "_clientip"
+    },
+    {
+      "label": "sky-goods.com",
+      "contains": "sky-goods.com"
+    },
+    {
+      "label": "session_start line",
+      "contains": "session_start();"
+    },
+    {
+      "label": "SESSION click_id",
+      "contains": "$_SESSION['click_id']"
+    },
+    {
+      "label": "SESSION fb_pixel",
+      "contains": "$_SESSION['fb_pixel']"
+    },
+    {
+      "label": "SESSION stream_id",
+      "contains": "$_SESSION['stream_id']"
+    },
+    {
+      "label": "SESSION pub_sub_id",
+      "contains": "$_SESSION['pub_sub_id']"
+    },
+    {
+      "label": "SESSION extra_id",
+      "contains": "$_SESSION['extra_id_"
+    },
+    {
+      "label": "SESSION google_pixel",
+      "contains": "$_SESSION['google_pixel']"
+    },
+    {
+      "label": "SESSION tiktok_pixel",
+      "contains": "$_SESSION['tiktok_pixel']"
+    },
+    {
+      "label": "SESSION publisher_order_id",
+      "contains": "$_SESSION['publisher_order_id']"
+    }
+  ],
+  "remove_dirs": [
+    {
+      "path": "vendor"
+    },
+    {
+      "path": "shared"
+    },
+    {
+      "path": "pieces"
+    },
+    {
+      "path": "lib"
+    },
+    {
+      "path": "invoice2"
+    },
+    {
+      "path": "confirm"
+    }
+  ],
+  "remove_files": [
+    {
+      "path": "js/tooltips.js"
+    },
+    {
+      "path": "pp.html"
+    },
+    {
+      "path": "agreement.html"
+    },
+    {
+      "path": "call.html"
+    },
+    {
+      "path": "error.html"
+    },
+    {
+      "path": "politics.html"
+    },
+    {
+      "path": "script_land.js"
+    },
+    {
+      "path": "tl-validator.js"
+    },
+    {
+      "path": "success.html"
+    },
+    {
+      "path": "resubmit.php"
+    },
+    {
+      "path": "submit-version.php"
+    },
+    {
+      "path": "subscribe1.php"
+    },
+    {
+      "path": "success.html"
+    },
+    {
+      "path": "mail-subscribe.php"
+    },
+    {
+      "path": "privacy.html"
+    },
+    {
+      "path": "lemon.php"
+    },
+    {
+      "path": "success.php"
+    },
+    {
+      "path": "config.php"
+    },
+    {
+      "path": "composer.json"
+    },
+    {
+      "path": "lib.php"
+    },
+    {
+      "path": "order.php"
+    },
+    {
+      "path": "validate_phone.php"
+    },
+    {
+      "path": "composer.lock"
+    },
+    {
+      "path": "GeoLite2-Country.mmdb"
+    },
+    {
+      "path": "phoneMask.js"
+    },
+    {
+      "path": "config.php"
+    },
+    {
+      "path": "error.php"
+    },
+    {
+      "path": "get_status.php"
+    },
+    {
+      "path": "info.php"
+    },
+    {
+      "path": "onepage.php"
+    },
+    {
+      "path": "order.php"
+    },
+    {
+      "path": "policy_en.php"
+    },
+    {
+      "path": "policy_euro.php"
+    },
+    {
+      "path": "policy2.php"
+    },
+    {
+      "path": "policykz.php"
+    },
+    {
+      "path": "policykz2.php"
+    },
+    {
+      "path": "send_lead.php"
+    },
+    {
+      "path": "terms_en.php"
+    },
+    {
+      "path": "trackers.php"
+    },
+    {
+      "path": "trackers_order.php"
+    },
+    {
+      "path": "confirm.html"
+    },
+    {
+      "path": "price.js"
+    },
+    {
+      "path": "backfix.js"
+    },
+    {
+      "path": "webpack-pro.runtime.min.js"
+    },
+    {
+      "path": "webpack.runtime.min.js"
+    },
+    {
+      "path": "translater.js"
+    },
+    {
+      "path": "cpaland.js"
+    },
+    {
+      "path": "countries.js"
+    },
+    {
+      "path": "be.js"
+    },
+    {
+      "path": "alarm.js"
+    },
+    {
+      "path": "1fe677d469ed5813945fce8b281bdf7d.js"
+    },
+    {
+      "path": "error_log"
+    },
+    {
+      "path": "send.php"
+    },
+    {
+      "path": "ywbackfix.js"
+    }
+  ],
+  "remove_inputs_by_name": [
+    {
+      "name": "lemon_id"
+    },
+    {
+      "name": "webmaster_id"
+    },
+    {
+      "name": "bunch_id"
+    },
+    {
+      "name": "is_popup"
+    },
+    {
+      "name": "from_recall_button"
+    },
+    {
+      "name": "form_id"
+    },
+    {
+      "name": "l"
+    },
+    {
+      "name": "a24b98bbd42079aa50d2c8cc362ce392b852f01c"
+    },
+    {
+      "name": "validate_phone_enable"
+    },
+    {
+      "name": "esub"
+    },
+    {
+      "name": "template_name"
+    },
+    {
+      "name": "country_code"
+    },
+    {
+      "name": "payment_redirect"
+    },
+    {
+      "name": "broker_redirect"
+    },
+    {
+      "name": "shipment_price"
+    },
+    {
+      "name": "total_price"
+    },
+    {
+      "name": "price_vat"
+    },
+    {
+      "name": "shipment_vat"
+    },
+    {
+      "name": "total_price_wo_shipping"
+    },
+    {
+      "name": "price"
+    },
+    {
+      "name": "old_price"
+    },
+    {
+      "name": "currency"
+    },
+    {
+      "name": "package_id"
+    },
+    {
+      "name": "package_prices"
+    },
+    {
+      "name": "pixel"
+    },
+    {
+      "name": "clickid"
+    },
+    {
+      "name": "cpc"
+    },
+    {
+      "name": "cur"
+    }
+  ],
+  "keep_only_inputs": [],
+  "strip_input_attrs": {
+    "_comment": "Снимает указанные атрибуты с инпутов имени и телефона. Имена type=hidden не трогаются.",
+    "target_names": [
+      "name",
+      "fio",
+      "fullname",
+      "fname",
+      "lname",
+      "phone",
+      "tel",
+      "telephone",
+      "telefon",
+      "telefono",
+      "mobile",
+      "имя",
+      "телефон",
+      "nom",
+      "nombre",
+      "nome",
+      "isim"
+    ],
+    "attrs": [
+      "maxlength",
+      "minlength",
+      "pattern",
+      "min",
+      "max"
+    ]
+  },
+  "clean_form_action": true,
+  "remove_php_blocks_with": [
+    "$_SESSION['publisher_order_id']",
+    "setcookie( $px, $z, time() + 2592000, '/' );",
+    "curl_close( $curl );",
+    "sky-goods.com"
+  ]
+}

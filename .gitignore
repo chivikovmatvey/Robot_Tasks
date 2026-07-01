@@ -1,0 +1,42 @@
+# Secrets
+backend/.env
+backend/storage/keitaro/
+backend/storage/proxies.json
+backend/storage/sessions/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+backend/.venv/
+backend/.installed
+
+# Node
+node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/tsconfig.tsbuildinfo
+
+# Storage — рантайм-файлы пользователя (создаются приложением при старте)
+backend/storage/uploads/
+backend/storage/outputs/
+backend/storage/configs/
+backend/storage/output/
+backend/storage/notifications_state.json
+backend/storage/published.json
+backend/storage/tasks_state.json
+
+# Assets — фотки продуктов нужно класть в git если хочется делиться
+# backend/storage/assets/*
+
+# Claude Code — локальные пермишены конкретной машины
+.claude/settings.local.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Logs
+*.log

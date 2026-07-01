@@ -1,0 +1,12 @@
+fastapi>=0.115
+uvicorn>=0.32
+python-multipart>=0.0.12
+Pillow>=10.0
+beautifulsoup4>=4.12
+playwright>=1.49
+python-dotenv>=1.0
+requests>=2.31
+# Удаление фона у изображений (offline, без ключей). Модель ~170МБ грузится
+# при первом вызове. onnxruntime — рантайм для модели U2-Net.
+rembg>=2.0
+onnxruntime>=1.17

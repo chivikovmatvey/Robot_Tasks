@@ -1,0 +1,194 @@
+/* ─────────────────────────────────────────────────────────────
+   Дизайн-токены: меняй здесь — меняется везде
+   ───────────────────────────────────────────────────────────── */
+:root {
+  /* Тёмная тема (по умолчанию) */
+  --bg:           #0d0e12;
+  --bg-elevated:  #15171d;
+  --bg-overlay:   #1c1f27;
+  --border:       #262932;
+  --border-hover: #3a3e4a;
+
+  --text:         #e8e9ec;
+  --text-muted:   #9095a3;
+  --text-dim:     #5c6170;
+
+  --accent:       #7c6cf1;       /* фиолетовый — основной */
+  --accent-hover: #8e80f5;
+  --accent-soft:  rgba(124, 108, 241, 0.12);
+
+  --success:      #5ec18a;
+  --warning:      #e8a857;
+  --danger:       #e35b5b;
+
+  --radius-sm:    6px;
+  --radius:       10px;
+  --radius-lg:    14px;
+
+  --shadow-sm:    0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow:       0 4px 12px rgba(0, 0, 0, 0.25);
+
+  --font-sans:    'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono:    'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace;
+}
+
+[data-theme='light'] {
+  --bg:           #f7f7f9;
+  --bg-elevated:  #ffffff;
+  --bg-overlay:   #f0f1f4;
+  --border:       #e4e6eb;
+  --border-hover: #c7cad3;
+
+  --text:         #1a1c22;
+  --text-muted:   #5c6170;
+  --text-dim:     #9095a3;
+
+  --accent:       #6b5cd9;
+  --accent-hover: #7c6cf1;
+  --accent-soft:  rgba(107, 92, 217, 0.1);
+}
+
+/* ─────────────────────────────────────────────────────────────
+   Reset + базовая типографика
+   ───────────────────────────────────────────────────────────── */
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#root {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+  transition: color 0.15s ease;
+}
+a:hover {
+  color: var(--accent-hover);
+}
+
+button {
+  font-family: inherit;
+  font-size: inherit;
+  cursor: pointer;
+}
+
+/* Тонкий, ненавязчивый скроллбар */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 5px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--border-hover);
+}
+
+/* ─────────────────────────────────────────────────────────────
+   Базовые компоненты как утилитарные классы
+   ───────────────────────────────────────────────────────────── */
+.card {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+  transition: border-color 0.15s ease;
+}
+.card:hover {
+  border-color: var(--border-hover);
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--text);
+  transition: all 0.15s ease;
+  font-weight: 500;
+}
+.btn:hover {
+  background: var(--bg-overlay);
+  border-color: var(--border-hover);
+}
+
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+.btn-primary:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+.btn-sm {
+  font-size: 12px;
+  padding: 5px 10px;
+  font-weight: 500;
+}
+.btn-danger-outline {
+  border-color: rgba(227, 91, 91, 0.55);
+  color: var(--danger);
+}
+.btn-danger-outline:hover:not(:disabled) {
+  background: rgba(227, 91, 91, 0.12);
+  border-color: var(--danger);
+}
+
+.muted   { color: var(--text-muted); }
+.dim     { color: var(--text-dim); }
+.mono    { font-family: var(--font-mono); }
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.badge-success { background: rgba(94, 193, 138, 0.12); color: var(--success); }
+.badge-warning { background: rgba(232, 168, 87, 0.12); color: var(--warning); }
+.badge-danger  { background: rgba(227, 91, 91, 0.12);  color: var(--danger);  }
+
+/* удаление ленда из списка сессии */
+.lander-row .lander-del { opacity: 0; transition: opacity .12s, color .12s; }
+.lander-row:hover .lander-del { opacity: .6; }
+.lander-row .lander-del:hover { opacity: 1; color: var(--danger, #e35b5b); }
+
+/* ручка перетаскивания порядка лендов */
+.lander-row .lander-grip { opacity: 0; transition: opacity .12s; }
+.lander-row:hover .lander-grip { opacity: .55; }
+.lander-row .lander-grip:active { cursor: grabbing; }
