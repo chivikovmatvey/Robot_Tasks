@@ -90,12 +90,17 @@ def prepare_plan(sid: str, lid: str, site_type: Optional[str] = None) -> dict:
     ls = s.landers.get(lid)
     if ls is None:
         raise ValueError(f"Ленд {lid} не найден в сессии {sid}")
-    if not ls.output_name:
-        raise ValueError("Ленд ещё не адаптирован — нет выходного архива для заливки")
-
-    zip_path = OUTPUTS / ls.output_name
-    if not zip_path.exists():
-        raise ValueError(f"Выходной архив не найден: {zip_path}")
+    # Адаптированный output, а если его нет — ИСХОДНЫЙ архив ленда
+    # (заливка без адаптации разрешена).
+    adapted = bool(ls.output_name)
+    if adapted:
+        zip_path = OUTPUTS / ls.output_name
+        if not zip_path.exists():
+            raise ValueError(f"Выходной архив не найден: {zip_path}")
+    else:
+        if not ls.zip_path or not Path(ls.zip_path).exists():
+            raise ValueError("Нет ни адаптированного, ни исходного архива ленда")
+        zip_path = Path(ls.zip_path)
 
     group = s.lander_offer(ls)  # оффер ленда (с учётом ручной подмены) = группа в Keitaro
     geos = runners.load_geos()
@@ -116,6 +121,7 @@ def prepare_plan(sid: str, lid: str, site_type: Optional[str] = None) -> dict:
     return {
         "sid": sid,
         "lid": lid,
+        "adapted": adapted,
         "zip_path": str(zip_path),
         "group": group,
         "product": product,
@@ -188,27 +194,63 @@ def upload(sid: str, lid: str, *, execute: bool = False,
             country_name=plan.get("country_name", ""),
             on_progress=on_progress,
         )
-        _step("Оффер создан — нужен выбор/подтверждение id для переименования")
-
         best = detection.get("best")
+        confident = detection.get("confident", False)
         # Предполагаемое финальное имя для лучшего кандидата (если уверенно).
         proposed_name = build_offer_name(
             plan["product"], bracket, plan["site_type"], plan["lang"],
             offer_id=best) if best else None
 
+        # АВТО-ПЕРЕИМЕНОВАНИЕ: если детекция уверенная (точное совпадение
+        # названия без id-префикса) — сразу дописываем id, без подтверждения.
+        # Ручной выбор остаётся только как fallback при неуверенной детекции.
+        if best and confident and proposed_name:
+            _step(f"Оффер создан (id={best}) — переименовываю: {proposed_name}")
+            kt.rename_offer(best, proposed_name,
+                            country_query=plan.get("country_query", ""),
+                            country_name=plan.get("country_name", ""))
+            _record_publish(sid, lid, int(best), proposed_name, plan)
+            log.info("Оффер %s создан и авто-переименован → %s", best, proposed_name)
+            return {
+                **plan,
+                "mode": "uploaded",  # создан И переименован — готово
+                "offer_id": best,
+                "final_name": proposed_name,
+                "network": network, "bracket": bracket,
+            }
+
+        _step("Оффер создан, но id не определён однозначно — нужен выбор id")
         result = {
             **plan,
-            "mode": "created_pending_rename",  # ОФФЕР СОЗДАН, переименование — после подтверждения
+            "mode": "created_pending_rename",  # fallback: ручной выбор id
             "name_no_id": name_no_id,
             "network": network, "bracket": bracket,
             "id_candidates": detection.get("candidates", []),
             "id_best": best,
-            "id_confident": detection.get("confident", False),
+            "id_confident": confident,
             "proposed_name": proposed_name,
         }
-        log.info("Оффер создан (без id-переименования). best=%s confident=%s",
-                 best, detection.get("confident"))
+        log.info("Оффер создан (детекция id неуверенная). best=%s confident=%s",
+                 best, confident)
         return result
+
+
+def _record_publish(sid: str, lid: str, offer_id: int, final_name: str, plan: dict) -> None:
+    """Сохраняет факт заливки в ленд + историю публикаций (общее для авто- и ручного rename)."""
+    s = get_manager().get(sid)
+    ls = s.landers.get(lid) if s else None
+    if ls is not None:
+        ls.adapt_params = {**(ls.adapt_params or {}),
+                           "keitaro_offer_id": offer_id,
+                           "keitaro_name": final_name}
+        get_manager()._save(s)
+    try:
+        from services.publish_history import get_history
+        get_history().add(offer_id, product=plan.get("product", ""),
+                          geo=plan.get("geo_id", ""), session_id=sid,
+                          name=final_name)
+    except Exception:  # noqa: BLE001
+        log.exception("Не удалось записать публикацию id=%s в историю", offer_id)
 
 
 def rename_offer(sid: str, lid: str, offer_id: int, *,
@@ -231,24 +273,39 @@ def rename_offer(sid: str, lid: str, offer_id: int, *,
                         country_query=plan.get("country_query", ""),
                         country_name=plan.get("country_name", ""))
 
-    # Сохраним факт заливки в ленд.
-    s = get_manager().get(sid)
-    ls = s.landers.get(lid) if s else None
-    if ls is not None:
-        ls.adapt_params = {**(ls.adapt_params or {}),
-                           "keitaro_offer_id": offer_id,
-                           "keitaro_name": final_name}
-        get_manager()._save(s)
-    # Запишем в историю опубликованных лендов (для статистики по дням/неделям).
-    try:
-        from services.publish_history import get_history
-        get_history().add(offer_id, product=plan.get("product", ""),
-                          geo=plan.get("geo_id", ""), session_id=sid,
-                          name=final_name)
-    except Exception:  # noqa: BLE001
-        log.exception("Не удалось записать публикацию id=%s в историю", offer_id)
+    # Сохраним факт заливки в ленд + историю публикаций.
+    _record_publish(sid, lid, offer_id, final_name, plan)
     log.info("Оффер %s переименован → %s", offer_id, final_name)
     return {"offer_id": offer_id, "final_name": final_name, "mode": "renamed"}
+
+
+def create_test_campaign(sid: str, lid: str, *, on_progress=None) -> dict:
+    """Создаёт тестовую кампанию для залитого (и переименованного с id) ленда.
+
+    Название кампании: «test mch <полное имя оффера с id>». Группа — Andrei AM.
+    Возвращает и сохраняет в ленд ссылку на кампанию (campaign_url)."""
+    mgr = get_manager()
+    s = mgr.get(sid)
+    ls = s.landers.get(lid) if s else None
+    if ls is None:
+        raise ValueError(f"Ленд {lid} не найден в сессии {sid}")
+    ap = ls.adapt_params or {}
+    offer_id = ap.get("keitaro_offer_id")
+    offer_name = ap.get("keitaro_name")
+    if not offer_id or not offer_name:
+        raise ValueError(
+            "Сначала залей ленд в Keitaro (нужны id и имя оффера после переименования)")
+
+    from connectors.keitaro import client_from_env
+    with client_from_env() as kt:
+        link = kt.create_test_campaign(offer_id, offer_name, on_progress=on_progress)
+
+    campaign_name = f"test mch {offer_name}"
+    ls.adapt_params = {**ap, "campaign_url": link, "campaign_name": campaign_name}
+    mgr._save(s)
+    log.info("Тестовая кампания для оффера %s создана: %s", offer_id, link)
+    return {"campaign_url": link, "campaign_name": campaign_name,
+            "offer_id": offer_id}
 
 
 # ── CLI ──────────────────────────────────────────────────────────

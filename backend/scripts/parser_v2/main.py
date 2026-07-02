@@ -75,7 +75,8 @@ def apply_dom_replacements(html_text: str, rules: list[dict], image_map: dict) -
         # ── ЦЕНА_НОВ_ЧИСЛО ───────────────────────────────────────────────────
         # Число новой цены: заменяем в тексте и в data-new-price
         elif label.startswith('ЦЕНА_НОВ_') and '_ЧИСЛО' in label:
-            result, n = _outside(result, find_str, repl_str)
+            result, n = _outside(result, find_str, repl_str,
+                                 number_mode=find_str.isdigit())
             if n == 0:
                 soup = BeautifulSoup(result, 'html.parser')
                 result, n = _split_text(result, soup, find_str, repl_str)
@@ -86,7 +87,8 @@ def apply_dom_replacements(html_text: str, rules: list[dict], image_map: dict) -
         # ── ЦЕНА_СТА_ЧИСЛО ───────────────────────────────────────────────────
         # Число старой цены: заменяем в тексте и в data-old-price
         elif label.startswith('ЦЕНА_СТА_') and '_ЧИСЛО' in label:
-            result, n = _outside(result, find_str, repl_str)
+            result, n = _outside(result, find_str, repl_str,
+                                 number_mode=find_str.isdigit())
             if n == 0:
                 soup = BeautifulSoup(result, 'html.parser')
                 result, n = _split_text(result, soup, find_str, repl_str)
@@ -105,7 +107,8 @@ def apply_dom_replacements(html_text: str, rules: list[dict], image_map: dict) -
 
         # ── ЦЕНА_* (комбинированный, старый формат) ──────────────────────────
         elif label.startswith('ЦЕНА_'):
-            result, n = _outside(result, find_str, repl_str)
+            result, n = _outside(result, find_str, repl_str,
+                                 number_mode=find_str.isdigit())
             if n == 0:
                 soup = BeautifulSoup(result, 'html.parser')
                 result, n = _split_price(result, soup, find_str, repl_str)

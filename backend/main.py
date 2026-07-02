@@ -75,6 +75,14 @@ async def lifespan(app: FastAPI):
             name="adrobot-poller",
         )
         thread.start()
+        # Слушатель Telegram (кнопки «Принять задачу»/«Список задач», /tasks).
+        if intake.notifier is not None:
+            threading.Thread(
+                target=intake.run_telegram_forever,
+                args=(stop,),
+                daemon=True,
+                name="telegram-listener",
+            ).start()
         app.state.intake = intake
         app.state._intake_stop = stop
         app.state._intake_thread = thread
@@ -482,6 +490,20 @@ def session_delete_lander(sid: str, lid: str):
         s = get_manager().delete_lander(sid, lid)
     except KeyError as e:
         raise HTTPException(404, str(e))
+    return s.to_dict()
+
+
+@app.post("/api/sessions/{sid}/landers/{lid}/reinstall")
+def session_reinstall_lander(sid: str, lid: str):
+    """Переустановить ленд: стереть текущее состояние и заново скачать
+    первоначальный архив из Keitaro."""
+    from services.session import get_manager
+    try:
+        s = get_manager().reinstall_lander(sid, lid)
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(422, str(e))
     return s.to_dict()
 
 
@@ -1085,6 +1107,108 @@ def keitaro_rename(sid: str, lid: str, body: KeitaroRenameBody):
     from services.keitaro_upload import rename_offer
     try:
         return rename_offer(sid, lid, body.offer_id, site_type=body.type)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"Keitaro: {e}")
+
+
+def _resolve_lander_task(sid: str, lid: str):
+    """Ленд → его задача. ВАЖНО для объединённых сессий: task_uid берётся из
+    САМОГО ленда, поэтому вариант/ревью физически не могут уйти в чужую задачу.
+    Возвращает (mgr, session, lander, task_uid)."""
+    from services.session import get_manager
+    mgr = get_manager()
+    s = mgr.get(sid)
+    ls = s.landers.get(lid) if s else None
+    if ls is None:
+        raise HTTPException(404, f"Ленд {lid} не найден в сессии {sid}")
+    uid = ls.task_uid
+    if not uid and len(s.tasks) == 1:
+        uid = s.tasks[0].get("uid")
+    if not uid:
+        raise HTTPException(
+            422, "У ленда нет привязки к задаче, а в сессии несколько задач — "
+                 "не могу определить задачу для действия")
+    return mgr, s, ls, uid
+
+
+def _mark_task_landers(mgr, s, task_uid: str, **flags) -> None:
+    """Ставит флаги в adapt_params ВСЕМ лендам указанной задачи (move/review —
+    действия уровня задачи, статус должен отразиться на всех её лендах)."""
+    default_uid = s.tasks[0].get("uid") if len(s.tasks) == 1 else None
+    for l in s.landers.values():
+        if (l.task_uid or default_uid) == task_uid:
+            l.adapt_params = {**(l.adapt_params or {}), **flags}
+    mgr._save(s)
+
+
+@app.post("/api/sessions/{sid}/landers/{lid}/task-variant")
+def task_add_variant(request: Request, sid: str, lid: str):
+    """Добавляет залитый ленд ВАРИАНТОМ в его задачу AdRobot (Add variant).
+
+    task_uid и offer_id определяются на сервере из самого ленда."""
+    intake = _require_intake(request)
+    mgr, s, ls, uid = _resolve_lander_task(sid, lid)
+    offer_id = (ls.adapt_params or {}).get("keitaro_offer_id")
+    if not offer_id:
+        raise HTTPException(422, "Сначала залей ленд в Keitaro (нет id оффера)")
+    try:
+        intake.client.add_variant(uid, offer_id)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"AdRobot: {e}")
+    ls.adapt_params = {**(ls.adapt_params or {}),
+                       "variant_added": True, "variant_task_uid": uid}
+    mgr._save(s)
+    return {"task_uid": uid, "offer_id": offer_id,
+            "task_title": ls.task_title or ""}
+
+
+class VariantsMoveBody(BaseModel):
+    scope: str = Field(..., description="private | public")
+
+
+@app.post("/api/sessions/{sid}/landers/{lid}/task-variants-move")
+def task_move_variants(request: Request, sid: str, lid: str, body: VariantsMoveBody):
+    """«Move all to private/public group» для ЗАДАЧИ этого ленда."""
+    intake = _require_intake(request)
+    mgr, s, ls, uid = _resolve_lander_task(sid, lid)
+    try:
+        intake.client.move_variants(uid, body.scope)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"AdRobot: {e}")
+    _mark_task_landers(mgr, s, uid, variants_moved=body.scope)
+    return {"task_uid": uid, "scope": body.scope}
+
+
+@app.post("/api/sessions/{sid}/landers/{lid}/task-review")
+def task_submit_review(request: Request, sid: str, lid: str):
+    """«Submit for review» для ЗАДАЧИ этого ленда (статус → REVIEW)."""
+    intake = _require_intake(request)
+    mgr, s, ls, uid = _resolve_lander_task(sid, lid)
+    try:
+        detail = intake.client.submit_review(uid)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"AdRobot: {e}")
+    _mark_task_landers(mgr, s, uid, review_submitted=True)
+    # обновим кэш задач — в списке статус сразу станет REVIEW
+    try:
+        intake.fetch_relevant()
+    except Exception:  # noqa: BLE001
+        pass
+    return {"task_uid": uid, "status": "REVIEW",
+            "task_title": detail.title or ls.task_title or ""}
+
+
+@app.post("/api/sessions/{sid}/landers/{lid}/test-campaign")
+def keitaro_test_campaign(sid: str, lid: str):
+    """Создаёт тестовую кампанию (test mch …, группа Andrei AM) для залитого
+    ленда и возвращает ссылку на неё."""
+    from services.keitaro_upload import create_test_campaign
+    try:
+        return create_test_campaign(sid, lid)
     except ValueError as e:
         raise HTTPException(422, str(e))
     except Exception as e:  # noqa: BLE001

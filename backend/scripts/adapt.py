@@ -369,6 +369,20 @@ def process_offer(src_root: Path, dst_root: Path, config: dict, verbose: bool,
             if ext in {'.html', '.htm', '.php'}:
                 from scripts.parser_v2 import apply_dom_replacements
                 text, n = apply_dom_replacements(text, rules, image_map)
+            elif ext == '.css':
+                # В CSS нет цен и текста продукта — слепые замены ломали вёрстку
+                # (цена «50» превращала translate(-50%,-50%) в translate(-229%,-229%)).
+                # Меняем только пути/имена картинок (background: url(...)).
+                text, n = apply_image_rules(text, image_map)
+            elif ext in {'.js', '.json'}:
+                # В JS/JSON замена ГОЛЫХ чисел цены ломает код: ключи палитр
+                # ({50:"#f3e5f5"} → {229:...}), hex-цвета (#4caf50 → #4caf229),
+                # таймауты. Цены виджетов приходят из data-атрибутов HTML
+                # (parser_v2), поэтому умные цены здесь выключены; текстовые
+                # правила (продукт и т.п.) и картинки — остаются.
+                text, n1 = apply_replacements(text, rules)
+                text, n3 = apply_image_rules(text, image_map)
+                n = n1 + n3
             else:
                 text, n1 = apply_replacements(text, rules)
                 text, n2 = apply_smart_prices(text, rules, geo_id)

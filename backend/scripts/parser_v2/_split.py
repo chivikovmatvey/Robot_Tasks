@@ -4,7 +4,7 @@ import re
 from bs4 import BeautifulSoup
 
 from ._groups import collect_all_groups, collect_inline_groups, get_node_text, NO_TEXT_REPLACE_TAGS
-from ._primitives import replace_outside_attrs
+from ._primitives import replace_outside_attrs, NUM_BAD_PREV, NUM_BAD_NEXT
 from bs4 import NavigableString, Tag
 
 _INVISIBLE_RE = re.compile(r'[\u200b\u200c\u200d\ufeff\u00ad\u200e\u200f]')
@@ -46,6 +46,7 @@ def replace_split_text(raw_html: str, soup: BeautifulSoup,
     groups = collect_all_groups(soup)
     count = 0
     find_norm = vis_normalize(find_str)
+    is_number = find_str.isdigit()  # голое число цены — нужны границы
 
     for group in groups:
         group_norm = vis_normalize(group.text)
@@ -78,6 +79,13 @@ def replace_split_text(raw_html: str, soup: BeautifulSoup,
                 continue
         else:
             match_end = match_start + len(find_str)
+
+        # Голое число: не заменяем часть другого токена («50» в «50%»/«1.50»).
+        if is_number:
+            prev = group.text[match_start - 1] if match_start > 0 else ''
+            nxt = group.text[match_end] if match_end < len(group.text) else ''
+            if prev in NUM_BAD_PREV or nxt in NUM_BAD_NEXT:
+                continue
 
         involved = []
         for node, n_start, n_end in group.nodes:

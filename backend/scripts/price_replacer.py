@@ -193,7 +193,10 @@ def parse_price_amount(price_str: str) -> Optional[int]:
 
 _CURRENCY_TOKENS_RE = (
     r'₹|₽|₺|₴|₸|₦|₪|₱|฿|₫|฿|Rp|RM|zł|zl|Kč|Kc|Ft|lei|лв\.?|грн\.?|CHF|'
-    r'[A-Z]{2,4}'
+    # Генерик-код валюты (CRC, GTQ, MXN…) — ТОЛЬКО верхний регистр, даже под
+    # re.IGNORECASE: иначе px/vh/deg/rem из CSS считались «валютой» и число
+    # перед ними заменялось как цена (ломало вёрстку).
+    r'(?-i:[A-Z]{2,4})'
 )
 
 # Символы которые могут стоять ДО числа
@@ -220,13 +223,18 @@ def _make_price_regex(amount: int) -> re.Pattern:
         )
 
     full_pattern = (
-        r'(?<!\d)'
-        r'(' + _SYM_BEFORE_RE + r')?'
-        r'\s?'
+        # Не цена, если сразу перед числом цифра, точка/запятая (часть другого
+        # числа: 1,50 / 24.390) или минус (CSS: translate(-50%...), margin:-50px).
+        r'(?<![\d.,-])'
+        # Пробел до числа поглощаем ТОЛЬКО вместе с символом валюты ($ 50),
+        # иначе он терялся при замене («Solo 50» → «Solo229»).
+        r'(?:(' + _SYM_BEFORE_RE + r')\s?)?'
         r'(' + num_re + r')'
         r'\s?'
         r'(' + _CURRENCY_TOKENS_RE + r')?'
-        r'(?!\d)'
+        # Не цена, если дальше буква/цифра/% — единицы измерения в CSS/JS:
+        # 50% (keyframes, border-radius), 50px, 50s, 50deg, 50vh и т.п.
+        r'(?![\w%])'
     )
     return re.compile(full_pattern, re.IGNORECASE)
 

@@ -1,6 +1,7 @@
 import { useRef, useState, ChangeEvent, DragEvent } from 'react';
 import { api, BatchWidgetResponse, BatchWidgetResult } from '../lib/api';
 import { LogViewer } from '../components/LogViewer';
+import { Icon } from '../components/Icon';
 
 export function BatchWidgetPage() {
   const [files, setFiles] = useState<File[]>([]);
@@ -295,7 +296,7 @@ function ResultRow({ r, batchName }: { r: BatchWidgetResult; batchName: string |
         <tr className="batch-row-detail">
           <td colSpan={7}>
             <div className="dim small">{r.source_name}</div>
-            {r.error && <div className="error-text small">⚠ {r.error}</div>}
+            {r.error && <div className="error-text small"><Icon name="alert" size={11} /> {r.error}</div>}
             <div className="batch-log mono small">
               {r.log.map((l, i) => (
                 <div key={i}>{l}</div>

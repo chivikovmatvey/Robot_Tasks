@@ -731,6 +731,34 @@ class SessionManager:
         log.info("Ленд %s удалён из сессии %s", lid, sid)
         return s
 
+    def reinstall_lander(self, sid: str, lid: str) -> AdaptationSession:
+        """Переустановка ленда: стирает текущее состояние (скачанный архив,
+        адаптированный output, историю версий, параметры) и заново скачивает
+        ПЕРВОНАЧАЛЬНЫЙ ленд из Keitaro. Медиа-замены задачи не трогаются —
+        они общие для задачи и пригодятся при повторной адаптации."""
+        import shutil
+        s, ls = self._get_lander(sid, lid)
+        if not re.fullmatch(r"\d{4,5}", lid):
+            raise ValueError(
+                "Переустановка доступна только лендам, скачанным из Keitaro (числовой id)")
+
+        if ls.output_name:
+            from utils.runners import STORAGE
+            (STORAGE / "outputs" / ls.output_name).unlink(missing_ok=True)
+        if ls.zip_path:
+            Path(ls.zip_path).unlink(missing_ok=True)
+        shutil.rmtree(self._history_dir(sid, lid), ignore_errors=True)
+
+        # свежее состояние с сохранением привязки к задаче
+        s.landers[lid] = LanderState(
+            lander_id=lid, task_uid=ls.task_uid, task_title=ls.task_title,
+            offer_override=ls.offer_override)
+        s.status = SessionStatus.PREPARING
+        self._save(s)
+        self.prepare_async(sid)
+        log.info("Ленд %s переустанавливается (сессия %s): скачиваю первоначальный", lid, sid)
+        return s
+
     def reorder_landers(self, sid: str, order: list[str]) -> AdaptationSession:
         """Переставляет ленды в сессии согласно списку id `order`.
 

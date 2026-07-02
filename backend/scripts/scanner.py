@@ -222,7 +222,10 @@ def detect_prices(text: str) -> tuple[str | None, str | None, str | None]:
     # Чистый текст без PHP для поиска символьных валют (чтобы $ не ломал)
     clean_text = strip_php_for_price_search(text)
 
-    # 1. data-new-price / data-old-price — самый надёжный источник (из оригинала)
+    # 1. data-new-price / data-old-price — самый надёжный источник (из оригинала).
+    # Запоминаем отдельно, какие числа виджет считает new/old: если обе цены
+    # распознаны, они имеют ПРИОРИТЕТ над min/max текстовых кандидатов.
+    widget_vals: dict[str, list[tuple[int, str]]] = {"new": [], "old": []}
     for attr, val in re.findall(r'data-(new|old)-price="([^"]+)"', text):
         val = val.strip()
         # "99 zł", "590 MXN", "99€", "$590 MXN"
@@ -234,6 +237,7 @@ def detect_prices(text: str) -> tuple[str | None, str | None, str | None]:
                    or (cur_raw.upper() if cur_raw.upper() in CURRENCY_GEO else None))
             if iso:
                 candidates.append((num, val, iso, cur_raw))
+                widget_vals[attr].append((num, iso))
 
     # 1b. Префиксный символ валюты перед числом: "L990" (HNL), "Rp50000" (IDR) и т.п.
     # Эти форматы не ловятся паттерном ^\d+ выше, обрабатываем отдельно.
@@ -252,6 +256,7 @@ def detect_prices(text: str) -> tuple[str | None, str | None, str | None]:
             if m:
                 num = int(m.group(1))
                 candidates.append((num, val, iso, prefix))
+                widget_vals[attr].append((num, iso))
                 break
 
     # 2. Символьные валюты в clean_text (PHP переменные уже убраны).
@@ -291,8 +296,12 @@ def detect_prices(text: str) -> tuple[str | None, str | None, str | None]:
     # пробелах → катастрофический бэктрекинг (ReDoS): на прогонах из пробелов и
     # тегов, не оканчивающихся валютой, движок перебирал экспоненту разбиений и
     # скан подвисал на десятки секунд (вешая весь бэкенд). Один \s* на итерацию.
-    SEP_TAG = r'\s*(?:<[^<>]*>\s*)+'
-    NUM_BLK = r'(\d{1,3}(?:[.\s]\d{3})+|\d{2,7})'
+    # Не больше 4 тегов между числом и валютой: сплит-цена Elementor — это
+    # СОСЕДНИЕ спаны. Неограниченный (…)+ перепрыгивал через целый SVG-блок и
+    # спаривал «24990 CRC </span><svg>…<h2>50% REBAJADO» → мусорный кандидат 50.
+    SEP_TAG = r'\s*(?:<[^<>]*>\s*){1,4}'
+    # Число, за которым идёт % — скидка, а не цена (50% REBAJADO).
+    NUM_BLK = r'(\d{1,3}(?:[.\s]\d{3})+|\d{2,7})(?!\s*%)'
 
     # 4a. буквенный код в отдельном блоке (число ⟶ код, и код ⟶ число)
     for m in re.finditer(NUM_BLK + SEP_TAG + r'([A-Za-z]{2,4})\b', text):
@@ -355,9 +364,19 @@ def detect_prices(text: str) -> tuple[str | None, str | None, str | None]:
 
     cur_sym = min(all_syms, key=sym_priority)
 
-    nums = sorted(set(p[0] for p in prices_this_cur))
-    p_new = min(nums)
-    p_old = max(nums) if len(nums) > 1 else None
+    # Виджет знает цены точно: если data-new-price И data-old-price дали числа
+    # в выбранной валюте — берём их, а не min/max текстовых кандидатов (иначе
+    # мусорное мелкое число из текста, напр. «50» из «50% OFF», становилось
+    # «новой ценой»: CRC 50 / 49980 вместо 24990 / 49980).
+    w_new = sorted({n for n, iso in widget_vals["new"] if iso == best_iso and n > 5})
+    w_old = sorted({n for n, iso in widget_vals["old"] if iso == best_iso and n > 5})
+    if w_new and w_old and w_new[0] != w_old[-1]:
+        p_new = w_new[0]
+        p_old = w_old[-1]
+    else:
+        nums = sorted(set(p[0] for p in prices_this_cur))
+        p_new = min(nums)
+        p_old = max(nums) if len(nums) > 1 else None
 
     # Ищем точные строки в тексте для правил замены
     # Предпочитаем строку с cur_sym (чистый вариант, без $)

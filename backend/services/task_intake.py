@@ -251,17 +251,16 @@ class TaskIntake:
             if notify and self.notifier:
                 try:
                     detail = self.client.get_task(t.url)
-                    # Кнопки: открыть задачу + начать задачу (PENDING→IN_PROCESS).
-                    # После клика «Начать» редирект на карточку покажет, принята ли.
-                    buttons = [("🔗 Открыть задачу", detail.url)]
-                    try:
-                        buttons.append(("▶️ Начать задачу",
-                                        self.client.start_working_url(detail.uid)))
-                    except Exception:  # noqa: BLE001
-                        pass
+                    # «Принять задачу» — callback-кнопка: бот САМ активирует
+                    # работу (change-status) и отвечает результатом, без
+                    # перехода на сайт. Плюс список задач одной кнопкой.
                     self.notifier.send_message(
                         format_task(detail),
-                        url_buttons=buttons,
+                        url_buttons=[("🔗 Открыть задачу", detail.url)],
+                        callback_buttons=[
+                            ("▶️ Принять задачу", f"accept:{detail.uid}"),
+                            ("📋 Список задач", "tasks"),
+                        ],
                     )
                     log.info("Уведомление: %s → %s", t.assigned_to, detail.title or t.uid)
                 except Exception:  # noqa: BLE001
@@ -367,6 +366,112 @@ class TaskIntake:
     def get_detail(self, uid_or_url: str) -> dict:
         d = self.client.get_task(uid_or_url)
         return asdict(d)
+
+    # ── интерактив Telegram: /tasks, кнопки «принять»/«список» ──
+    _STATUS_EMOJI = {"REVIEW": "🔎", "ACCEPTED": "✅", "IN_PROCESS": "🔄",
+                     "PENDING": "⏳", "NEED_DETAILS": "❓"}
+
+    @staticmethod
+    def _norm_status(s: str) -> str:
+        return (s or "").strip().upper().replace(" ", "_")
+
+    def _my_tasks(self) -> list[TaskSummary]:
+        """Мои задачи всех статусов (в порядке сайта — свежие сверху)."""
+        if self.my_id:
+            return self.client.list_tasks(status="ANY", assigned_to=self.my_id)
+        return self.client.list_tasks(status="ANY", assigned_text=self.me)
+
+    def send_tasks_summary(self) -> None:
+        """Последние 5 задач коротко + статистика статусов по последним 30."""
+        from collections import Counter
+        tasks = self._my_tasks()
+        lines = ["📋 <b>Последние 5 задач</b>"]
+        if not tasks:
+            lines.append("— задач не найдено")
+        for i, t in enumerate(tasks[:5], 1):
+            em = self._STATUS_EMOJI.get(self._norm_status(t.status), "▫️")
+            title = t.title or t.offer or t.uid
+            lines.append(f"{i}. {em} {esc(title)} — {esc(t.status or '?')}")
+        last30 = tasks[:30]
+        if last30:
+            c = Counter(self._norm_status(t.status) for t in last30)
+            rev, acc, inp = c.get("REVIEW", 0), c.get("ACCEPTED", 0), c.get("IN_PROCESS", 0)
+            stat = (f"📊 Из последних {len(last30)}: 🔎 на ревью: {rev} · "
+                    f"✅ принято: {acc} · 🔄 в процессе: {inp}")
+            other = len(last30) - rev - acc - inp
+            if other:
+                stat += f" · ▫️ прочее: {other}"
+            lines += ["", stat]
+        self.notifier.send_message(
+            "\n".join(lines),
+            callback_buttons=[("🔄 Обновить", "tasks")],
+        )
+
+    def _handle_tg_update(self, upd: dict) -> None:
+        msg = upd.get("message") or {}
+        cb = upd.get("callback_query") or {}
+        chat_id = str((msg.get("chat") or {}).get("id")
+                      or ((cb.get("message") or {}).get("chat") or {}).get("id") or "")
+        if chat_id != str(self.notifier.chat_id):
+            return  # чужой чат — игнор
+
+        if cb:
+            data = cb.get("data") or ""
+            try:
+                if data == "tasks":
+                    self.notifier.answer_callback(cb["id"])
+                    self.send_tasks_summary()
+                elif data.startswith("accept:"):
+                    uid = data.split(":", 1)[1]
+                    detail = self.client.start_working(uid)  # сам активирует работу
+                    self.notifier.answer_callback(cb["id"], "Задача принята в работу ✅")
+                    self.notifier.send_message(
+                        f"▶️ <b>Принята в работу</b>: {esc(detail.title or uid)}",
+                        url_button=("🔗 Открыть задачу", detail.url),
+                    )
+                    log.info("Задача %s принята в работу через Telegram", uid)
+            except Exception as exc:  # noqa: BLE001
+                log.exception("Сбой обработки callback %r", data)
+                try:
+                    self.notifier.answer_callback(
+                        cb["id"], f"Ошибка: {exc}"[:190], show_alert=True)
+                except Exception:  # noqa: BLE001
+                    pass
+            return
+
+        text = (msg.get("text") or "").strip()
+        if text.split("@")[0] in ("/tasks", "/start"):
+            try:
+                self.send_tasks_summary()
+            except Exception:  # noqa: BLE001
+                log.exception("Сбой /tasks")
+
+    def run_telegram_forever(self, stop: threading.Event) -> None:
+        """Long-poll getUpdates: команды и callback-кнопки бота."""
+        if not self.notifier:
+            return
+        try:
+            self.notifier.set_commands([("tasks", "Список задач и статистика")])
+        except Exception:  # noqa: BLE001
+            log.warning("Не удалось зарегистрировать команды бота", exc_info=True)
+        offset = None
+        # Дренаж бэклога: не переигрываем старые нажатия после рестарта.
+        try:
+            upds = self.notifier.get_updates()
+            if upds:
+                offset = upds[-1]["update_id"] + 1
+        except Exception:  # noqa: BLE001
+            pass
+        log.info("Telegram-листенер запущен (кнопки/команды бота)")
+        while not stop.is_set():
+            try:
+                upds = self.notifier.get_updates(offset)
+                for u in upds:
+                    offset = u["update_id"] + 1
+                    self._handle_tg_update(u)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("Ошибка Telegram-листенера: %s", exc)
+                stop.wait(5)
 
     # ── фоновый цикл ─────────────────────────────────────────────
     def run_forever(self, stop: threading.Event, interval: int = 60,

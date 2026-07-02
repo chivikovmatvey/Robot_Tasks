@@ -1,4 +1,5 @@
 import { useNavigate } from 'react-router-dom';
+import { Icon } from './Icon';
 
 interface ResultCardProps {
   resultName: string | null;
@@ -47,7 +48,7 @@ export function ResultCard({ resultName, resultUrl, success }: ResultCardProps) 
             onClick={() => navigate(`/preview?zip=${encodeURIComponent(resultName)}`)}
             title="Открыть в редакторе превью"
           >
-            👁 Preview
+            <Icon name="eye" size={13} /> Preview
           </button>
         )}
         {resultUrl && (

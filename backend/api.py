@@ -5,6 +5,7 @@ API-роуты для обработки офферов.
 """
 import json
 import mimetypes
+import re
 import zipfile
 from pathlib import Path
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Query
@@ -400,12 +401,10 @@ async def adapt_endpoint(
 
 @router.get("/preview/{filename}/files")
 def preview_list_files(filename: str):
-    """Список файлов внутри zip из outputs."""
+    """Список файлов внутри zip (outputs или исходник ленда session__sid__lid)."""
     if '/' in filename or '\\' in filename or '..' in filename:
         raise HTTPException(400, "Invalid filename")
-    target = STORAGE / 'outputs' / filename
-    if not target.exists():
-        raise HTTPException(404, "Not found")
+    target = _resolve_preview_target(filename)
     import zipfile
     files = []
     with zipfile.ZipFile(target, 'r') as zf:
@@ -574,9 +573,7 @@ def preview_save_file(filename: str, body: PreviewSaveBody):
         raise HTTPException(400, "Invalid filename")
     if not _scan_preview_validate_inner_path(body.path):
         raise HTTPException(400, "Invalid path")
-    target = STORAGE / 'outputs' / filename
-    if not target.exists():
-        raise HTTPException(404, "Not found")
+    target = _resolve_preview_target(filename)  # outputs или исходник сессии
 
     new_bytes = body.content.encode('utf-8')
 
@@ -605,8 +602,91 @@ def preview_save_file(filename: str, body: PreviewSaveBody):
     return {"success": True, "path": body.path, "size": len(new_bytes)}
 
 
+_SRC_TAG_OPEN = re.compile(r'<([a-zA-Z][a-zA-Z0-9-]*)')
+_SRC_VOID_SKIP = {'br', 'hr', 'wbr'}  # мелкие void-теги без смысла для выбора блока
+
+
+def _instrument_src_lines(text: str) -> str:
+    """Размечает открывающие теги атрибутом data-src-line="N" (1-based строка
+    в ИСХОДНОМ файле) — для режима редактора: клик по блоку в превью ведёт к
+    строке кода. Пропускает комментарии, PHP-блоки и содержимое script/style,
+    учитывает кавычки в атрибутах и php внутри тега."""
+    out: list[str] = []
+    i, n, line = 0, len(text), 1
+    while i < n:
+        ch = text[i]
+        if ch != '<':
+            j = text.find('<', i)
+            j = n if j == -1 else j
+            out.append(text[i:j])
+            line += text.count('\n', i, j)
+            i = j
+            continue
+        # <!-- комментарий -->
+        if text.startswith('<!--', i):
+            j = text.find('-->', i)
+            j = n if j == -1 else j + 3
+            out.append(text[i:j]); line += text.count('\n', i, j); i = j
+            continue
+        # <?php ... ?>
+        if text.startswith('<?', i):
+            j = text.find('?>', i)
+            j = n if j == -1 else j + 2
+            out.append(text[i:j]); line += text.count('\n', i, j); i = j
+            continue
+        # <!DOCTYPE ...> / </закрывающий>
+        if text.startswith('<!', i) or text.startswith('</', i):
+            j = text.find('>', i)
+            j = n if j == -1 else j + 1
+            out.append(text[i:j]); line += text.count('\n', i, j); i = j
+            continue
+        m = _SRC_TAG_OPEN.match(text, i)
+        if not m:
+            out.append(ch); i += 1
+            continue
+        tag = m.group(1).lower()
+        # ищем конец тега с учётом кавычек и php внутри атрибутов
+        j, q = m.end(), None
+        while j < n:
+            c = text[j]
+            if q:
+                if c == q:
+                    q = None
+                j += 1
+            elif c in ('"', "'"):
+                q = c; j += 1
+            elif c == '<' and text.startswith('<?', j):
+                k = text.find('?>', j)
+                j = n if k == -1 else k + 2
+            elif c == '>':
+                break
+            else:
+                j += 1
+        if j >= n:  # незакрытый тег в конце файла
+            out.append(text[i:]); break
+        tag_src = text[i:j]
+        if tag in _SRC_VOID_SKIP:
+            out.append(tag_src + '>')
+        else:
+            col = i - text.rfind('\n', 0, i)  # 1-based колонка символа '<'
+            mark = f' data-src-line="{line}" data-src-col="{col}"'
+            stripped = tag_src.rstrip()
+            if stripped.endswith('/'):
+                out.append(f'{stripped[:-1].rstrip()}{mark}/>')
+            else:
+                out.append(f'{tag_src}{mark}>')
+        line += text.count('\n', i, j + 1)
+        i = j + 1
+        # содержимое <script>/<style> не трогаем
+        if tag in ('script', 'style'):
+            m2 = re.search(rf'</{tag}\s*>', text[i:], re.IGNORECASE)
+            j2 = i + m2.end() if m2 else n
+            out.append(text[i:j2]); line += text.count('\n', i, j2); i = j2
+    return ''.join(out)
+
+
 @router.get("/preview/{filename}/render")
-def preview_render_file(filename: str, path: str = Query("index.php")):
+def preview_render_file(filename: str, path: str = Query("index.php"), edit: int = Query(0)):
     """
     Рендерит HTML файл из zip с подменой путей к ресурсам.
     PHP теги остаются как текст (не выполняются).
@@ -633,6 +713,11 @@ def preview_render_file(filename: str, path: str = Query("index.php")):
         if real is None:
             raise HTTPException(404, f"File not found: {path}")
         html = zf.read(real).decode('utf-8', errors='replace')
+
+    # Режим редактора: размечаем теги строками исходника ДО любых трансформаций,
+    # чтобы data-src-line указывал на строки файла, который открыт в редакторе.
+    if edit:
+        html = _instrument_src_lines(html)
 
     # ВАЖНО: серверные PHP-блоки ДО <!DOCTYPE>/<html> (require_once init.php,
     # проверка clickid и т.п.) при исполнении на сервере не дают вывода. В превью

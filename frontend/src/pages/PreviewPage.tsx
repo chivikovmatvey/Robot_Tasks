@@ -202,7 +202,7 @@ export function PreviewPage() {
                 color: view === v ? '#fff' : 'var(--c-muted, #888)',
               }}
             >
-              {v === 'split' ? '⬛⬛ Split' : v === 'code' ? '{ } Код' : '👁 Превью'}
+              {v === 'split' ? '◧ Split' : v === 'code' ? '{ } Код' : 'Превью'}
             </button>
           ))}
         </div>

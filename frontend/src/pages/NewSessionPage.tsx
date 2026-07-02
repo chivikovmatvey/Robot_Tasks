@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { api } from '../lib/api';
 import { OfferNamesHint } from '../components/OfferNamesHint';
+import { Icon } from '../components/Icon';
 
 // Клиентский разбор ID лендов из текста задачи (зеркало бэкенда).
 // id ленда — это 4-5 цифр (отсев мусора: цены «299», годы, длинные числа).
@@ -154,7 +155,7 @@ export function NewSessionPage() {
                     {t.offer}{t.ids.length ? ` · ленды: ${t.ids.join(', ')}` : ' · ленды не распознаны'}
                   </div>
                 </div>
-                <span className="dim small" style={{ fontFamily: 'monospace' }}>{t.ids.length} 🗂</span>
+                <span className="dim small" style={{ fontFamily: 'monospace' }}>{t.ids.length} лендов</span>
               </div>
             ))}
             {sourceTasks.length === 0 && <p className="dim small">Загружаю задачи…</p>}
@@ -230,7 +231,7 @@ export function NewSessionPage() {
               fontSize: 12, padding: '0.35rem 0.6rem', borderRadius: 6,
               background: 'var(--bg-elevated, #141414)', border: '1px solid var(--border, #2a2a2a)',
             }}>
-              <span style={{ fontFamily: 'monospace' }}>📦 {f.name}</span>
+              <span style={{ fontFamily: 'monospace' }}><Icon name="archive" size={12} /> {f.name}</span>
               <span className="dim">{(f.size / 1024 / 1024).toFixed(1)} MB</span>
             </div>
           ))}

@@ -34,9 +34,11 @@ class TelegramNotifier:
         text: str,
         url_button: Optional[tuple[str, str]] = None,
         url_buttons: Optional[list[tuple[str, str]]] = None,
+        callback_buttons: Optional[list[tuple[str, str]]] = None,
     ) -> dict:
         """text — HTML. url_button — (подпись, url). url_buttons — несколько
-        кнопок-ссылок [(подпись, url), …] (каждая отдельной строкой)."""
+        кнопок-ссылок [(подпись, url), …]. callback_buttons — кнопки-действия
+        [(подпись, callback_data), …] — обрабатывает TaskIntake.run_telegram_forever."""
         if len(text) > MAX_LEN:
             text = text[: MAX_LEN - 20] + "\n…(обрезано)"
         payload = {
@@ -50,9 +52,28 @@ class TelegramNotifier:
             buttons.insert(0, url_button)
         # Только кнопки с непустым url (Telegram отвергнет пустые).
         rows = [[{"text": t, "url": u}] for (t, u) in buttons if u]
+        for (t, d) in (callback_buttons or []):
+            if d:
+                rows.append([{"text": t, "callback_data": d[:64]}])
         if rows:
             payload["reply_markup"] = {"inline_keyboard": rows}
         return self._call("sendMessage", payload)
+
+    def answer_callback(self, callback_id: str, text: str = "",
+                        show_alert: bool = False) -> None:
+        """Ответ на нажатие callback-кнопки (тост/алерт у пользователя)."""
+        payload: dict = {"callback_query_id": callback_id}
+        if text:
+            payload["text"] = text[:200]
+        if show_alert:
+            payload["show_alert"] = True
+        self._call("answerCallbackQuery", payload)
+
+    def set_commands(self, commands: list[tuple[str, str]]) -> None:
+        """Регистрирует команды бота (меню «/» в клиенте Telegram)."""
+        self._call("setMyCommands", {
+            "commands": [{"command": c, "description": d} for c, d in commands],
+        })
 
     def get_updates(self, offset: Optional[int] = None) -> list[dict]:
         payload = {"timeout": 25}

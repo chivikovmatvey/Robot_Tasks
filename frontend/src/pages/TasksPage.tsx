@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api, TaskSummary, TaskGroup, TaskDetail, CommentAttachment } from '../lib/api';
+import { Icon } from '../components/Icon';
 
 function statusColor(s: string) {
   const u = (s || '').toUpperCase();
@@ -68,7 +69,7 @@ export function TasksPage() {
                 background: 'var(--accent-soft, rgba(124,111,255,0.12))',
               }}
             >
-              <span style={{ fontSize: 20 }} title="Несколько задач на один оффер">🔀</span>
+              <span style={{ fontSize: 20, display: 'inline-flex' }} title="Несколько задач на один оффер"><Icon name="shuffle" size={18} /></span>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 14, fontWeight: 600 }}>
                   {g.count} задачи на один оффер: {g.offer}

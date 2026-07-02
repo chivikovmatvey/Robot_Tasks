@@ -1,9 +1,13 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { api, chatStream, translateStream, keitaroUploadStream, SessionFull, LanderState, SuggestParams, LogLine, CommentAttachment, LanderMedia, Replacement, ChatMessage, AiStatus, KeitaroPlan, LanderVersion } from '../lib/api';
 import { Markdown } from '../components/Markdown';
 import { OfferNamesHint } from '../components/OfferNamesHint';
 import { TaskDetailsModal } from '../components/TaskDetailsModal';
+import { Icon } from '../components/Icon';
+// Редактор кода тянет CodeMirror (~700КБ) — грузим чанк только при входе в режим.
+const LanderEditor = lazy(() =>
+  import('../components/LanderEditor').then((m) => ({ default: m.LanderEditor })));
 
 const ACTIVE_STATUSES = new Set(['queued', 'downloading', 'scanning', 'adapting']);
 
@@ -64,6 +68,9 @@ function LanderPanel({ sid, lander }: { sid: string; lander: LanderState }) {
   // Ширина превью (null = на всю доступную область) — для проверки адаптива.
   // Если выбранная ширина больше области, ленд масштабируется, а не обрезается.
   const [previewWidth, setPreviewWidth] = useState<number | null>(null);
+  // Режим правой зоны: просмотр (обычная адаптация) или редактор кода.
+  const [uiMode, setUiMode] = useState<'view' | 'edit'>('view');
+  const [editorMounted, setEditorMounted] = useState(false); // ленивый маунт; буферы живут при переключении
   const previewPaneRef = useRef<HTMLDivElement>(null);
   const [pane, setPane] = useState({ w: 0, h: 0 });
 
@@ -157,12 +164,36 @@ function LanderPanel({ sid, lander }: { sid: string; lander: LanderState }) {
           delete rest._hints;
           setGroup(s.group || '');
           setGroupDraft(s.group || '');
-          setParams(lander.adapt_params || rest);
+          const saved: any = lander.adapt_params;
+          if (saved) {
+            // Сохранённые параметры прошлой адаптации — основа, НО исходные
+            // цены донора (src_price_*) берём из СВЕЖЕГО скана: они описывают
+            // сам ленд, и после пересканирования/переустановки старое значение
+            // (напр. ошибочное «50») тихо ломало замену цены.
+            const next = { ...saved };
+            for (const k of ['src_price_new_num', 'src_price_new_cur',
+                             'src_price_old_num', 'src_price_old_cur'] as const) {
+              if (rest[k] !== undefined && rest[k] !== '' && rest[k] !== saved[k]) next[k] = rest[k];
+            }
+            setParams(next);
+          } else {
+            setParams(rest);
+          }
         })
         .catch((e) => setError(e.message))
         .finally(() => setLoadingSuggest(false));
     }
   }, [lander.status, sid, lid]);
+
+  // Переустановка/повторное скачивание ленда: параметры устарели — сбрасываем,
+  // чтобы после нового скана форма перезаполнилась свежим suggest.
+  // 'adapting' сюда не входит: во время адаптации параметры трогать нельзя.
+  useEffect(() => {
+    if (['queued', 'downloading', 'scanning'].includes(lander.status) && params) {
+      setParams(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lander.status]);
 
   const set = (k: string, v: any) => setParams((p) => ({ ...(p || {}), [k]: v }));
   const setPrice = (which: 'new' | 'old', v: string) => {
@@ -287,8 +318,29 @@ function LanderPanel({ sid, lander }: { sid: string; lander: LanderState }) {
           </select>
         )}
         {restoring && <span className="dim small">↩ откатываю…</span>}
+        {/* Переключатель Просмотр / Редактор кода */}
+        {previewUrl && (
+          <div style={{ display: 'flex', border: '1px solid var(--border, #2a2a2a)', borderRadius: 6, overflow: 'hidden' }}>
+            {([['view', 'Просмотр'], ['edit', 'Редактор']] as const).map(([m, label]) => (
+              <button
+                key={m}
+                onClick={() => {
+                  setUiMode(m);
+                  if (m === 'edit') setEditorMounted(true);
+                  else setVersion((v) => v + 1); // вернулись из редактора — обновить превью правками
+                }}
+                style={{
+                  fontSize: 12, padding: '3px 10px', cursor: 'pointer', border: 'none',
+                  display: 'inline-flex', alignItems: 'center', gap: 5,
+                  background: uiMode === m ? 'var(--accent)' : 'transparent',
+                  color: uiMode === m ? '#fff' : 'var(--text-muted)',
+                }}
+              ><Icon name={m === 'view' ? 'eye' : 'code'} size={13} />{label}</button>
+            ))}
+          </div>
+        )}
         {lander.task_title && (
-          <span className="dim small" title="Задача-источник этого ленда">📋 {lander.task_title}</span>
+          <span className="dim small" title="Задача-источник этого ленда"><Icon name="clipboard" size={12} /> {lander.task_title}</span>
         )}
         {lander.offer_name && <span className="dim small" style={{ marginLeft: 'auto' }}>Донор: <code>{lander.offer_name}</code></span>}
       </div>
@@ -319,8 +371,17 @@ function LanderPanel({ sid, lander }: { sid: string; lander: LanderState }) {
         <div style={{ padding: '0.5rem 0.8rem', background: 'rgba(239,68,68,0.12)', color: '#f87171', borderRadius: 6, fontSize: 12, flexShrink: 0 }}>{error}</div>
       )}
 
+      {/* Редактор кода: маунтится лениво, при переключении прячется (буферы живут) */}
+      {editorMounted && previewUrl && (
+        <div style={{ display: uiMode === 'edit' ? 'flex' : 'none', flex: 1, minHeight: 0 }}>
+          <Suspense fallback={<p className="dim small">Загружаю редактор…</p>}>
+            <LanderEditor key={previewSource} zipName={previewSource} />
+          </Suspense>
+        </div>
+      )}
+
       {/* двухколоночная зона: левая колонка (вкладки Параметры/Чат) + превью */}
-      <div style={{ display: 'flex', gap: '1rem', flex: 1, minHeight: 0 }}>
+      <div style={{ display: uiMode === 'edit' ? 'none' : 'flex', gap: '1rem', flex: 1, minHeight: 0 }}>
         {/* левая колонка */}
         <div style={{ flex: '0 0 440px', display: 'flex', flexDirection: 'column', minHeight: 0, border: '1px solid var(--border, #2a2a2a)', borderRadius: 8, overflow: 'hidden' }}>
           <div style={{ display: 'flex', borderBottom: '1px solid var(--border, #2a2a2a)', flexShrink: 0 }}>
@@ -418,22 +479,28 @@ function LanderPanel({ sid, lander }: { sid: string; lander: LanderState }) {
 
             <div style={{ marginTop: '0.8rem', display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
               <button className="btn btn-primary" onClick={runAdapt} disabled={adapting}>
-                {adapting ? 'Адаптирую…' : '⚙ Адаптировать'}
+                {adapting ? 'Адаптирую…' : <><Icon name="settings" size={13} /> Адаптировать</>}
               </button>
               {lander.output_name && (
                 <>
-                  <a className="btn" style={{ textDecoration: 'none', fontSize: 13 }} href={`/api/download/${encodeURIComponent(lander.output_name)}`}>↓ Скачать</a>
-                  <Link className="btn" style={{ textDecoration: 'none', fontSize: 13 }} to={`/preview?zip=${encodeURIComponent(lander.output_name)}`}>✎ Открыть в Preview</Link>
+                  <a className="btn" style={{ textDecoration: 'none', fontSize: 13 }} href={`/api/download/${encodeURIComponent(lander.output_name)}`}><Icon name="download" size={13} /> Скачать</a>
+                  <Link className="btn" style={{ textDecoration: 'none', fontSize: 13 }} to={`/preview?zip=${encodeURIComponent(lander.output_name)}`}><Icon name="edit" size={13} /> Открыть в Preview</Link>
                   <button className="btn" style={{ fontSize: 13 }} onClick={() => setShowTranslate((v) => !v)}>Перевод</button>
-                  <button className="btn" style={{ fontSize: 13 }} onClick={() => setShowKeitaro((v) => !v)}>→ Keitaro</button>
                 </>
+              )}
+              {/* Заливка доступна и БЕЗ адаптации — уйдёт исходный архив ленда */}
+              {(lander.output_name || lander.status === 'ready') && (
+                <button className="btn" style={{ fontSize: 13 }} onClick={() => setShowKeitaro((v) => !v)}
+                        title={lander.output_name ? 'Залить адаптированный ленд' : 'Залить ИСХОДНЫЙ ленд (без адаптации)'}>
+                  → Keitaro{lander.output_name ? '' : ' (без адаптации)'}
+                </button>
               )}
             </div>
             {showTranslate && lander.output_name && (
               <TranslatePanel sid={sid} lid={lid} onApplied={() => setVersion((v) => v + 1)} />
             )}
-            {showKeitaro && lander.output_name && (
-              <KeitaroUploadPanel sid={sid} lid={lid} />
+            {showKeitaro && (lander.output_name || lander.status === 'ready') && (
+              <KeitaroUploadPanel sid={sid} lid={lid} lander={lander} />
             )}
             {lander.adapt_log && lander.adapt_log.length > 0 && (
               <div style={{ marginTop: '0.8rem' }}><LogView log={lander.adapt_log} /></div>
@@ -755,7 +822,7 @@ function ImageMapEditor({ sid, lander, params, set, onChanged }: {
                 <button type="button" className="btn" title="Удалить фон (rembg)" disabled={!!busy}
                         onClick={() => removeBg(r.name)}
                         style={{ width: '100%', fontSize: 9, marginTop: 2, padding: '1px 0' }}>
-                  {busy === 'bg-' + r.name ? '…' : '✂ фон'}
+                  {busy === 'bg-' + r.name ? '…' : <><Icon name="scissors" size={9} /> фон</>}
                 </button>
               </div>
             ))}
@@ -815,7 +882,7 @@ function ImageMapEditor({ sid, lander, params, set, onChanged }: {
               {m.kind === 'image' && (
                 <button type="button" className="btn" style={{ fontSize: 13, whiteSpace: 'nowrap', padding: '2px 6px' }}
                         title="Нейро-правка картинки (GPT Image 2)" onClick={() => setEditMedia(m)}>
-                  🪄
+                  <Icon name="wand" size={13} />
                 </button>
               )}
               <span className="dim">→</span>
@@ -1458,7 +1525,9 @@ function TranslatePanel({ sid, lid, onApplied }: { sid: string; lid: string; onA
 
 // Панель заливки ленда в Keitaro: показывает план (dry-run, без Keitaro),
 // затем по явному подтверждению запускает реальное создание оффера.
-function KeitaroUploadPanel({ sid, lid }: { sid: string; lid: string }) {
+function KeitaroUploadPanel({ sid, lid, lander }: { sid: string; lid: string; lander?: LanderState }) {
+  // Уже залитый ленд: восстанавливаем экран «готово» из сохранённых параметров.
+  const ap = (lander?.adapt_params || {}) as Record<string, any>;
   const [plan, setPlan] = useState<KeitaroPlan | null>(null);
   const [type, setType] = useState<string>('');       // '' = авто
   const [network, setNetwork] = useState<string>(''); // '' = авто (с донора)
@@ -1468,11 +1537,65 @@ function KeitaroUploadPanel({ sid, lid }: { sid: string; lid: string }) {
   const [created, setCreated] = useState<KeitaroPlan | null>(null);  // оффер создан, ждём подтв. id
   const [selectedId, setSelectedId] = useState<number | ''>('');     // выбранный id для rename
   const [renaming, setRenaming] = useState(false);
-  const [renamed, setRenamed] = useState<{ offer_id: number; final_name: string } | null>(null);
+  const [renamed, setRenamed] = useState<{ offer_id: number; final_name: string } | null>(
+    ap.keitaro_offer_id && ap.keitaro_name
+      ? { offer_id: ap.keitaro_offer_id, final_name: ap.keitaro_name } : null);
+  const [campaign, setCampaign] = useState<{ campaign_url: string; campaign_name: string } | null>(
+    ap.campaign_url ? { campaign_url: ap.campaign_url, campaign_name: ap.campaign_name || '' } : null);
+  const [campaignBusy, setCampaignBusy] = useState(false);
+  // Варианты задачи AdRobot (Add variant / Move all / Submit for review).
+  // Задача определяется НА СЕРВЕРЕ по task_uid самого ленда — в объединённых
+  // сессиях вариант не может попасть в чужую задачу.
+  const [variantAdded, setVariantAdded] = useState<boolean>(!!ap.variant_added);
+  const [variantsMoved, setVariantsMoved] = useState<string>(ap.variants_moved || '');
+  const [reviewSent, setReviewSent] = useState<boolean>(!!ap.review_submitted);
+  const [taskBusy, setTaskBusy] = useState('');
   const [error, setError] = useState('');
 
+  const doAddVariant = async () => {
+    setTaskBusy('variant'); setError('');
+    try {
+      await api.addTaskVariant(sid, lid);
+      setVariantAdded(true);
+    } catch (e: any) {
+      setError(e.message || 'Не удалось добавить вариант');
+    } finally { setTaskBusy(''); }
+  };
+
+  const doMoveVariants = async (scope: 'private' | 'public') => {
+    setTaskBusy(scope); setError('');
+    try {
+      await api.moveTaskVariants(sid, lid, scope);
+      setVariantsMoved(scope);
+    } catch (e: any) {
+      setError(e.message || 'Не удалось переместить варианты');
+    } finally { setTaskBusy(''); }
+  };
+
+  const doSubmitReview = async () => {
+    setTaskBusy('review'); setError('');
+    try {
+      await api.submitTaskReview(sid, lid);
+      setReviewSent(true);
+    } catch (e: any) {
+      setError(e.message || 'Не удалось отправить на ревью');
+    } finally { setTaskBusy(''); }
+  };
+
+  const doTestCampaign = async () => {
+    setCampaignBusy(true); setError('');
+    try {
+      const r = await api.testCampaign(sid, lid);
+      setCampaign({ campaign_url: r.campaign_url, campaign_name: r.campaign_name });
+    } catch (e: any) {
+      setError(e.message || 'Не удалось создать тестовую кампанию');
+    } finally {
+      setCampaignBusy(false);
+    }
+  };
+
   const loadPlan = (t: string) => {
-    setLoading(true); setError(''); setCreated(null); setRenamed(null);
+    setLoading(true); setError(''); setCreated(null);
     api.keitaroPlan(sid, lid, t || undefined)
       .then(setPlan)
       .catch((e) => setError(e.message || 'Не удалось собрать план'))
@@ -1481,16 +1604,20 @@ function KeitaroUploadPanel({ sid, lid }: { sid: string; lid: string }) {
   useEffect(() => { loadPlan(type); /* eslint-disable-next-line */ }, [sid, lid, type]);
 
   const doUpload = async () => {
-    if (!confirm('Создать оффер в Keitaro для этого ленда? Переименование (id в названии) спросим отдельно после создания.')) return;
     setUploading(true); setError(''); setSteps([]);
     try {
       await keitaroUploadStream(sid, lid, { type: type || undefined, network: network || undefined }, (ev) => {
         if (ev.type === 'step' && ev.message) setSteps((s) => [...s, ev.message!]);
         else if (ev.type === 'done') {
           const r = ev.result as KeitaroPlan;
-          setCreated(r);
-          // если уверенно — предвыбираем найденный id, иначе пусть пользователь выберет сам
-          setSelectedId(r.id_confident && r.id_best ? r.id_best : '');
+          if (r.mode === 'uploaded' && r.offer_id && r.final_name) {
+            // авто-переименование прошло на бэке — сразу экран «готово»
+            setRenamed({ offer_id: r.offer_id, final_name: r.final_name });
+          } else {
+            // fallback: id не определён однозначно — ручной выбор
+            setCreated(r);
+            setSelectedId(r.id_confident && r.id_best ? r.id_best : '');
+          }
         }
         else if (ev.type === 'error') setError(ev.error || 'Ошибка заливки');
       });
@@ -1509,8 +1636,6 @@ function KeitaroUploadPanel({ sid, lid }: { sid: string; lid: string }) {
 
   const confirmRename = async () => {
     if (selectedId === '' || !created) return;
-    const fname = finalNameFor(selectedId);
-    if (!confirm(`Переименовать оффер id ${selectedId} в:\n${fname}\n\nУбедись, что это ИМЕННО только что созданный оффер. Продолжить?`)) return;
     setRenaming(true); setError('');
     try {
       const r = await api.keitaroRename(sid, lid, selectedId as number, type || undefined);
@@ -1562,7 +1687,7 @@ function KeitaroUploadPanel({ sid, lid }: { sid: string; lid: string }) {
           <Row k="Скобка" v={plan.bracket || '—'} />
           <Row k="Название" v={plan.name_template} />
           <div className="dim small" style={{ marginTop: 4 }}>
-            Скобка <code>[ВЕРТИКАЛЬ-ГЕО]</code> построена из группы. Сеть — с донора (можно задать вручную). Оффер сначала создаётся БЕЗ id; id в название дописывается отдельным шагом — с подтверждением.
+            Скобка <code>[ВЕРТИКАЛЬ-ГЕО]</code> построена из группы. Сеть — с донора (можно задать вручную). id в название дописывается автоматически после создания; ручной выбор появится, только если id не определится однозначно.
           </div>
           <div style={{ marginTop: 8, display: 'flex', gap: 8, alignItems: 'center' }}>
             <button className="btn btn-primary" onClick={doUpload} disabled={uploading} style={{ fontSize: 13 }}>
@@ -1586,11 +1711,11 @@ function KeitaroUploadPanel({ sid, lid }: { sid: string; lid: string }) {
       {created && !renamed && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           <div style={{ padding: '0.5rem 0.7rem', background: 'rgba(232,168,87,0.14)', color: 'var(--warning, #e8a857)', borderRadius: 6, fontSize: 13 }}>
-            ✅ Оффер <b>создан</b> в Keitaro (без id в названии). Подтверди, какому id дописать id-префикс — переименование запустится только после твоего выбора.
+            <Icon name="check" size={13} /> Оффер <b>создан</b> в Keitaro (без id в названии). Выбери, какому id дописать id-префикс.
           </div>
           {!created.id_confident && (
             <div className="dim small" style={{ color: 'var(--warning, #e8a857)' }}>
-              ⚠ Точное совпадение названия не найдено автоматически — ВНИМАТЕЛЬНО выбери именно только что созданный оффер (обычно с наибольшим id и БЕЗ цифрового префикса в названии). НЕ переименуй чужой старый оффер.
+              <Icon name="alert" size={12} /> Точное совпадение названия не найдено автоматически — ВНИМАТЕЛЬНО выбери именно только что созданный оффер (обычно с наибольшим id и БЕЗ цифрового префикса в названии). НЕ переименуй чужой старый оффер.
             </div>
           )}
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 12 }}>
@@ -1626,9 +1751,78 @@ function KeitaroUploadPanel({ sid, lid }: { sid: string; lid: string }) {
       )}
 
       {renamed && (
-        <div style={{ padding: '0.6rem 0.8rem', background: 'rgba(74,222,128,0.12)', color: '#4ade80', borderRadius: 6, fontSize: 13 }}>
-          Готово: оффер <b>id {renamed.offer_id}</b> переименован.<br />
-          <code style={{ color: 'var(--text)' }}>{renamed.final_name}</code>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div style={{ padding: '0.6rem 0.8rem', background: 'rgba(74,222,128,0.12)', color: '#4ade80', borderRadius: 6, fontSize: 13 }}>
+            Готово: оффер <b>id {renamed.offer_id}</b> создан и переименован.<br />
+            <code style={{ color: 'var(--text)' }}>{renamed.final_name}</code>
+          </div>
+          {/* Тестовая кампания: test mch <имя>, группа Andrei AM → ссылка */}
+          {!campaign && (
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <button className="btn btn-primary" onClick={doTestCampaign} disabled={campaignBusy} style={{ fontSize: 13 }}>
+                {campaignBusy ? 'Создаю тестовую кампанию…' : <><Icon name="flask" size={13} /> Создать тестовую кампанию</>}
+              </button>
+              {campaignBusy && <span className="dim small">кампании создаются ~30-60с</span>}
+            </div>
+          )}
+          {campaign && (
+            <div style={{ padding: '0.6rem 0.8rem', background: 'rgba(56,189,248,0.10)', borderRadius: 6, fontSize: 13, display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <span><Icon name="flask" size={12} /> Кампания: <code>{campaign.campaign_name}</code></span>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <a className="btn btn-primary" href={campaign.campaign_url} target="_blank" rel="noopener"
+                   style={{ fontSize: 13, textDecoration: 'none' }}>
+                  <Icon name="external" size={13} /> Открыть тестовый сайт
+                </a>
+                <code className="dim small" style={{ wordBreak: 'break-all' }}>{campaign.campaign_url}</code>
+              </div>
+            </div>
+          )}
+          {/* Варианты задачи AdRobot: вариант → move all → submit for review.
+              Действия идут в ЗАДАЧУ ЭТОГО ленда (task_uid резолвит сервер). */}
+          <div style={{ padding: '0.6rem 0.8rem', border: '1px solid var(--border, #2a2a2a)', borderRadius: 6, display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div style={{ fontSize: 12, fontWeight: 600 }}>
+              Задача AdRobot{lander?.task_title ? <>: <span className="dim">{lander.task_title}</span></> : ''}
+            </div>
+            {!variantAdded ? (
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <button className="btn btn-primary" onClick={doAddVariant} disabled={!!taskBusy} style={{ fontSize: 13 }}>
+                  {taskBusy === 'variant' ? 'Добавляю вариант…' : <><Icon name="plus" size={13} /> Добавить вариант (id {renamed.offer_id})</>}
+                </button>
+              </div>
+            ) : (
+              <>
+                <span className="small" style={{ color: '#4ade80' }}>✓ Вариант id {renamed.offer_id} добавлен в задачу</span>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <button className="btn" onClick={() => doMoveVariants('private')} disabled={!!taskBusy} style={{ fontSize: 12 }}>
+                    {taskBusy === 'private' ? 'Перемещаю…' : <><Icon name="folder" size={13} /> Move all → приватная группа</>}
+                  </button>
+                  <button className="btn" onClick={() => doMoveVariants('public')} disabled={!!taskBusy} style={{ fontSize: 12 }}>
+                    {taskBusy === 'public' ? 'Перемещаю…' : <><Icon name="globe" size={13} /> Move all → публичная группа</>}
+                  </button>
+                  {variantsMoved && (
+                    <span className="small" style={{ color: '#4ade80' }}>
+                      ✓ в {variantsMoved === 'private' ? 'приватной' : 'публичной'} группе
+                    </span>
+                  )}
+                </div>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                  {!reviewSent ? (
+                    <button className="btn btn-primary" onClick={doSubmitReview} disabled={!!taskBusy} style={{ fontSize: 12 }}>
+                      {taskBusy === 'review' ? 'Отправляю…' : <><Icon name="send" size={13} /> Отправить задачу на ревью</>}
+                    </button>
+                  ) : (
+                    <span className="small" style={{ color: '#4ade80' }}>✓ Задача отправлена на ревью (REVIEW)</span>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+          <div>
+            <button className="btn" style={{ fontSize: 12 }} disabled={uploading || campaignBusy}
+                    onClick={() => { setRenamed(null); setCampaign(null); loadPlan(type); }}>
+              ↻ Залить заново (новый оффер)
+            </button>
+          </div>
         </div>
       )}
     </div>
@@ -1743,6 +1937,19 @@ export function SessionDetailPage() {
     }
   };
 
+  // Переустановка: стереть текущее состояние и заново скачать первоначальный ленд.
+  const reinstallLander = async (lid: string) => {
+    if (!confirm(`Переустановить ленд ${lid}? Текущее состояние (адаптация, правки, история) будет стёрто, и первоначальный ленд скачается из Keitaro заново.`)) return;
+    setError('');
+    try {
+      const s = await api.reinstallLander(sid, lid);
+      setSession(s);
+      ensurePolling(); // скачивание пошло — следим за статусом
+    } catch (e: any) {
+      setError(e.message || 'Не удалось переустановить ленд');
+    }
+  };
+
   // ── drag-and-drop порядка лендов ──
   const startDrag = (lid: string) => {
     dragIdRef.current = lid;
@@ -1824,7 +2031,7 @@ export function SessionDetailPage() {
         {taskRefs.length > 0 && (
           <button className="btn" style={{ fontSize: 12 }} onClick={() => setShowTaskDetails(true)}
                   title="Полная карточка задачи (для объединённых — вкладки по задачам)">
-            📋 Детали задач{taskRefs.length > 1 ? ` (${taskRefs.length})` : 'и'}
+            <Icon name="clipboard" size={13} /> Детали задач{taskRefs.length > 1 ? ` (${taskRefs.length})` : 'и'}
           </button>
         )}
         <button className="btn" style={{ fontSize: 12 }} disabled={archiving} onClick={archive}>
@@ -1890,6 +2097,20 @@ export function SessionDetailPage() {
                       </span>
                     )}
                   </button>
+                  {/^\d{4,5}$/.test(l.lander_id) && (
+                    <button
+                      className="lander-del"
+                      onClick={() => reinstallLander(l.lander_id)}
+                      title="Переустановить ленд: стереть всё и скачать первоначальный из Keitaro"
+                      aria-label="Переустановить ленд"
+                      style={{
+                        flexShrink: 0, width: 24, border: 'none', cursor: 'pointer',
+                        background: 'transparent', color: 'var(--text-muted)', fontSize: 13, lineHeight: 1,
+                      }}
+                    >
+                      ↻
+                    </button>
+                  )}
                   <button
                     className="lander-del"
                     onClick={() => removeLander(l.lander_id)}

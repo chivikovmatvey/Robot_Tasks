@@ -284,14 +284,13 @@ class AdRobotClient:
     # ---------- смена статуса задачи (ЕДИНСТВЕННОЕ меняющее действие) ----------
 
     # Допустимые целевые статусы (видны на карточке как кнопки change-status).
-    ALLOWED_STATUS_CHANGES = {"IN_PROCESS", "NEED_DETAILS"}
+    # REVIEW — кнопка «Submit for review» на карточке задачи.
+    ALLOWED_STATUS_CHANGES = {"IN_PROCESS", "NEED_DETAILS", "REVIEW"}
 
     def change_status(self, uid: str, status: str) -> TaskDetail:
         """Меняет статус задачи (напр. PENDING → IN_PROCESS, кнопка «Start working»).
 
-        ВНИМАНИЕ: это ЕДИНСТВЕННОЕ действие коннектора, изменяющее данные в
-        AdRobot. Повторяет ссылку change-status с карточки. Возвращает
-        обновлённую карточку.
+        Повторяет ссылку change-status с карточки. Возвращает обновлённую карточку.
         """
         status = (status or "").strip().upper()
         if status not in self.ALLOWED_STATUS_CHANGES:
@@ -319,6 +318,51 @@ class AdRobotClient:
         next_path = f"{TASKS_PATH}{uid}/"
         return self._url(f"{TASKS_PATH}{uid}/change-status/"
                          f"?status=IN_PROCESS&next={quote(next_path)}")
+
+    # ---------- варианты задачи (Add variant / Move all / Review) ----------
+
+    def add_variant(self, uid: str, offer_id: int | str) -> None:
+        """Добавляет вариант (id залитого ленда Keitaro) к задаче.
+
+        Повторяет форму «Add variant»: GET страницы формы (CSRF) → POST offer_id.
+        Успех — редирект на карточку; ошибка — та же форма с errorlist."""
+        uid = uid.strip("/").split("/")[-1]
+        next_path = f"{TASKS_PATH}{uid}/"
+        path = f"{TASKS_PATH}{uid}/variants/create/?next={quote(next_path)}"
+        page = self._get(path)
+        m = re.search(r'name="csrfmiddlewaretoken" value="([^"]+)"', page.text)
+        token = m.group(1) if m else self._csrf()
+        resp = self.session.post(
+            self._url(path),
+            data={"csrfmiddlewaretoken": token, "offer_id": str(offer_id)},
+            headers={"Referer": self._url(path)},
+            timeout=self.timeout,
+            allow_redirects=True,
+        )
+        resp.raise_for_status()
+        if "variants/create" in (resp.url or "") and 'id="id_offer_id"' in resp.text:
+            # форма вернулась — вытащим текст ошибки, если есть
+            soup = BeautifulSoup(resp.text, "html.parser")
+            el = soup.select_one(".errorlist, .invalid-feedback, .alert-danger")
+            err = el.get_text(" ", strip=True) if el else "форма вернулась с ошибкой"
+            raise RuntimeError(f"AdRobot не принял вариант {offer_id}: {err}")
+        log.info("Задача %s: добавлен вариант %s", uid, offer_id)
+
+    def move_variants(self, uid: str, scope: str) -> None:
+        """«Move all to private/public group» (scope: 'private' | 'public').
+
+        Повторяет GET-ссылку с карточки (confirm там только на JS-стороне)."""
+        scope = (scope or "").strip().lower()
+        if scope not in ("private", "public"):
+            raise ValueError(f"scope должен быть 'private' или 'public', а не {scope!r}")
+        uid = uid.strip("/").split("/")[-1]
+        next_path = f"{TASKS_PATH}{uid}/"
+        self._get(f"{TASKS_PATH}{uid}/variants/move-to-{scope}/?next={quote(next_path)}")
+        log.info("Задача %s: варианты перемещены в %s group", uid, scope)
+
+    def submit_review(self, uid: str) -> TaskDetail:
+        """«Submit for review» — переводит задачу в статус REVIEW."""
+        return self.change_status(uid, "REVIEW")
 
     # ---------- offer product images ----------
 

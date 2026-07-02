@@ -703,6 +703,26 @@ export const api = {
     request<SessionFull>(`/api/sessions/${encodeURIComponent(sid)}/landers/${encodeURIComponent(lid)}`, {
       method: 'DELETE',
     }),
+  addTaskVariant: (sid: string, lid: string) =>
+    request<{ task_uid: string; offer_id: number; task_title: string }>(
+      `/api/sessions/${encodeURIComponent(sid)}/landers/${encodeURIComponent(lid)}/task-variant`,
+      { method: 'POST' }),
+  moveTaskVariants: (sid: string, lid: string, scope: 'private' | 'public') =>
+    request<{ task_uid: string; scope: string }>(
+      `/api/sessions/${encodeURIComponent(sid)}/landers/${encodeURIComponent(lid)}/task-variants-move`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scope }) }),
+  submitTaskReview: (sid: string, lid: string) =>
+    request<{ task_uid: string; status: string; task_title: string }>(
+      `/api/sessions/${encodeURIComponent(sid)}/landers/${encodeURIComponent(lid)}/task-review`,
+      { method: 'POST' }),
+  testCampaign: (sid: string, lid: string) =>
+    request<{ campaign_url: string; campaign_name: string; offer_id: number }>(
+      `/api/sessions/${encodeURIComponent(sid)}/landers/${encodeURIComponent(lid)}/test-campaign`,
+      { method: 'POST' }),
+  reinstallLander: (sid: string, lid: string) =>
+    request<SessionFull>(`/api/sessions/${encodeURIComponent(sid)}/landers/${encodeURIComponent(lid)}/reinstall`, {
+      method: 'POST',
+    }),
   uploadLander: async (sid: string, file: File, landerId = '') => {
     const fd = new FormData();
     fd.append('file', file);

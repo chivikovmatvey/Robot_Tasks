@@ -192,3 +192,86 @@ button {
 .lander-row .lander-grip { opacity: 0; transition: opacity .12s; }
 .lander-row:hover .lander-grip { opacity: .55; }
 .lander-row .lander-grip:active { cursor: grabbing; }
+
+/* ============ панель поиска/замены CodeMirror (редактор кода ленда) ============ */
+.cm-editor .cm-panels {
+  background: var(--bg-elevated);
+  color: var(--text);
+  border-color: var(--border);
+  z-index: 5;
+}
+.cm-editor .cm-panels.cm-panels-top { border-bottom: 1px solid var(--border); }
+.cm-editor .cm-panel.cm-search {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  font-size: 12px;
+  font-family: var(--font-main, inherit);
+}
+.cm-editor .cm-panel.cm-search br { display: none; } /* дефолтная разметка ломает строку */
+.cm-editor .cm-panel.cm-search input[type='checkbox'] {
+  accent-color: var(--accent);
+  margin: 0 3px 0 6px;
+  vertical-align: middle;
+}
+.cm-editor .cm-panel.cm-search label {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.cm-editor .cm-panel.cm-search .cm-textfield {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  min-width: 170px;
+  outline: none;
+}
+.cm-editor .cm-panel.cm-search .cm-textfield:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+.cm-editor .cm-panel.cm-search .cm-button {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  background-image: none; /* убираем дефолтный градиент CodeMirror */
+  transition: background .12s, border-color .12s;
+}
+.cm-editor .cm-panel.cm-search .cm-button:hover {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+.cm-editor .cm-panel.cm-search .cm-button:active { transform: translateY(1px); }
+.cm-editor .cm-panel.cm-search button[name='close'] {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 16px;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.cm-editor .cm-panel.cm-search button[name='close']:hover {
+  color: var(--danger);
+  background: rgba(227, 91, 91, 0.12);
+}
+/* подсветка совпадений поиска */
+.cm-editor .cm-searchMatch { background: rgba(232, 168, 87, 0.35); }
+.cm-editor .cm-searchMatch-selected { background: rgba(124, 111, 255, 0.5); }

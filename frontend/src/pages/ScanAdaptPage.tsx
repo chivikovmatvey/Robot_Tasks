@@ -5,6 +5,7 @@ import { LogViewer } from '../components/LogViewer';
 import { ResultCard } from '../components/ResultCard';
 import { geoOptions, SearchableSelect, verticalOptions } from '../components/SearchableSelect';
 import { AssetsInlinePanel } from '../components/AssetsInlinePanel';
+import { Icon } from '../components/Icon';
 
 interface AdaptValues {
   geo_id: string;
@@ -653,7 +654,7 @@ export function ScanAdaptPage() {
       {completedResults.length > 0 && (
         <div className="card" style={{ borderLeft: '3px solid var(--c-warn, #f59e0b)' }}>
           <p className="small" style={{ color: 'var(--c-warn, #f59e0b)', margin: 0 }}>
-            ⚠️ Перед заливкой в Кейтаро откройте оффер в браузере и проверьте:
+            <Icon name="alert" size={12} /> Перед заливкой в Кейтаро откройте оффер в браузере и проверьте:
             картинку продукта, цены (новую и старую), название продукта, страну в форме.
           </p>
         </div>

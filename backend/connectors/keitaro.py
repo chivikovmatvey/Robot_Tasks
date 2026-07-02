@@ -913,6 +913,172 @@ class KeitaroClient:
             self._dump_debug("rename-offer")
             raise KeitaroError(f"Не удалось переименовать оффер {offer_id}: {e}")
 
+    # ── тестовая кампания для залитого ленда ─────────────────────
+    def create_test_campaign(self, offer_id: int | str, offer_full_name: str, *,
+                             group: str = "Andrei AM",
+                             name_prefix: str = "test mch",
+                             on_progress=None) -> str:
+        """Создаёт тестовую кампанию для оффера и возвращает ссылку на неё.
+
+        Флоу: #!/campaigns/ → «Создать» → имя «test mch <полное имя с id>» →
+        группа (Andrei AM) → «Создать поток» → вкладка «Схема» →
+        «Добавить офферы» (ждём готовности кнопки) → поиск по id → чекбокс →
+        «Добавить» → «Применить» → «Создать» → copy-link → ссылка из буфера.
+        """
+        page = self.page
+
+        def _step(msg: str) -> None:
+            log.info("test_campaign[%s]: %s", offer_id, msg)
+            if on_progress:
+                try:
+                    on_progress(msg)
+                except Exception:  # noqa: BLE001
+                    pass
+
+        self.login()
+
+        # Буфер обмена понадобится для copy-link (headless Chromium).
+        try:
+            origin = re.match(r"https?://[^/]+", self.base_url).group(0)
+            self._ctx.grant_permissions(["clipboard-read", "clipboard-write"],
+                                        origin=origin)
+        except Exception:  # noqa: BLE001
+            pass
+
+        campaign_name = f"{name_prefix} {offer_full_name}".strip()
+
+        try:
+            # 1) Грид кампаний → «Создать»
+            _step("открываю кампании")
+            self._goto(f"{self.base_url}/#!/campaigns/")
+            create_btn = page.locator('[data-test-id="create-button"]').first
+            create_btn.wait_for(state="visible", timeout=20_000)
+            create_btn.click()
+
+            # 2) Страница создания: фокус уже в поле названия — печатаем имя.
+            _step(f"ввожу название: {campaign_name}")
+            page.wait_for_timeout(1500)
+            page.keyboard.type(campaign_name, delay=15)
+            # Проверяем, что имя реально попало в какой-то input; иначе — руками.
+            ok_typed = page.evaluate(
+                "(name) => [...document.querySelectorAll('input')]"
+                ".some(i => (i.value || '').includes(name))",
+                campaign_name)
+            if not ok_typed:
+                filled = False
+                for sel in ('input[name="name"]', '[data-test-id="name-input"]',
+                            'form input[type="text"]'):
+                    try:
+                        page.locator(sel).first.fill(campaign_name, timeout=4_000)
+                        filled = True
+                        break
+                    except Exception:  # noqa: BLE001
+                        continue
+                if not filled:
+                    raise KeitaroError("Не нашёл поле названия кампании")
+
+            # 3) Группа — всегда Andrei AM (тот же react-select, что у офферов).
+            _step(f"выбираю группу: {group}")
+            self._select_group(group)
+
+            # 4) «Создать поток» → модалка
+            _step("создаю поток")
+            page.locator('button:has-text("Создать поток")').first.click(timeout=10_000)
+            page.wait_for_selector('.modal-content', timeout=15_000)
+
+            # 5) Вкладка «Схема»
+            _step("вкладка «Схема»")
+            page.locator('.modal-content a.nav-link:has-text("Схема")').first.click(timeout=10_000)
+
+            # 6) «Добавить офферы» — кнопка может долго грузиться (disabled,
+            # пока entity selector не инициализирован). Ждём готовности циклом,
+            # чтобы отличать «ещё грузится» от «ошибка».
+            _step("жду готовности кнопки «Добавить офферы»")
+            add_btn = page.locator('[data-test-id="add-offer-button"]').first
+            add_btn.wait_for(state="visible", timeout=20_000)
+            waited = 0
+            while add_btn.is_disabled():
+                page.wait_for_timeout(1_500)
+                waited += 1500
+                if waited % 9_000 == 0:
+                    _step(f"кнопка «Добавить офферы» ещё грузится ({waited // 1000}с)…")
+                if waited >= 60_000:
+                    self._dump_debug("campaign-add-offer-stuck")
+                    raise KeitaroError(
+                        "Кнопка «Добавить офферы» не стала доступной за 60с — "
+                        "похоже на ошибку загрузки (см. debug-скриншот)")
+            add_btn.click()
+
+            # 7) Модалка «Офферы»: поиск по id → чекбокс строки → «Добавить»
+            _step(f"ищу оффер {offer_id}")
+            search = page.locator('.modal-content input[type="search"]').last
+            search.wait_for(state="visible", timeout=15_000)
+            search.fill(str(offer_id))
+            row = page.locator(f'[data-test-id="row-{offer_id}"]').first
+            try:
+                row.wait_for(state="visible", timeout=20_000)
+            except PWTimeout:
+                self._dump_debug("campaign-offer-not-found")
+                raise KeitaroError(
+                    f"Оффер {offer_id} не найден в списке модалки «Офферы»")
+            row.locator('input[type="checkbox"]').first.click()
+            _step("добавляю оффер в поток")
+            # success-button ИМЕННО этой модалки (последняя открытая).
+            page.locator('.modal-content').last \
+                .locator('[data-test-id="success-button"]').first.click(timeout=10_000)
+            page.wait_for_timeout(800)
+
+            # 8) «Применить» в модалке потока
+            _step("применяю поток")
+            page.locator('.modal-content button:has-text("Применить")').first.click(timeout=10_000)
+            page.wait_for_timeout(1_200)
+
+            # 9) «Создать» кампанию
+            _step("создаю кампанию")
+            save_btn = page.locator('[data-test-id="save-button"]').first
+            save_btn.click(timeout=10_000)
+
+            # 10) Ждём появления id кампании (copy-link разблокируется) → клик
+            _step("жду ссылку кампании")
+            copy_btn = page.locator('[data-test-id="copy-link-button"]').first
+            copy_btn.wait_for(state="visible", timeout=30_000)
+            waited = 0
+            while copy_btn.is_disabled():
+                page.wait_for_timeout(1_000)
+                waited += 1000
+                if waited >= 45_000:
+                    self._dump_debug("campaign-no-id")
+                    raise KeitaroError(
+                        "Кампания не получила id за 45с — создание, похоже, не прошло")
+            page.wait_for_timeout(1_000)  # «немного подождать» после создания
+            copy_btn.click()
+            page.wait_for_timeout(500)
+
+            link = ""
+            try:
+                link = page.evaluate("navigator.clipboard.readText()") or ""
+            except Exception:  # noqa: BLE001
+                log.warning("Буфер обмена недоступен — ищу ссылку в DOM")
+            if not link.startswith("http"):
+                # Фолбэк: видимое поле/элемент со ссылкой кампании на странице.
+                link = page.evaluate(
+                    "() => { const i = [...document.querySelectorAll('input')]"
+                    ".find(x => /^https?:\\/\\//.test(x.value || '') && !/admin/.test(x.value));"
+                    " return i ? i.value : ''; }") or ""
+            if not link.startswith("http"):
+                self._dump_debug("campaign-no-link")
+                raise KeitaroError(
+                    "Кампания создана, но ссылку получить не удалось "
+                    "(см. debug-скриншот)")
+            self._shot("campaign-created")
+            _step(f"готово: {link}")
+            return link.strip()
+        except KeitaroError:
+            raise
+        except Exception as e:  # noqa: BLE001
+            self._dump_debug("campaign-create")
+            raise KeitaroError(f"Не удалось создать тестовую кампанию: {e}")
+
     # ── debug ────────────────────────────────────────────────────
     def _dump_debug(self, tag: str) -> None:
         try:
