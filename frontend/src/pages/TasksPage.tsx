@@ -18,6 +18,8 @@ export function TasksPage() {
   const [groups, setGroups] = useState<TaskGroup[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  // Ручной выбор задач для объединения в одну сессию (uid'ы отмеченных чекбоксов).
+  const [selected, setSelected] = useState<string[]>([]);
   const load = async (refresh = false) => {
     setLoading(true);
     setError('');
@@ -35,6 +37,16 @@ export function TasksPage() {
   // Перейти к созданию объединённой сессии из кластера задач на один оффер.
   const mergeGroup = (g: TaskGroup) => {
     const uids = g.tasks.map((t) => t.uid).join(',');
+    nav(`/sessions/new?tasks=${encodeURIComponent(uids)}`);
+  };
+
+  const toggleSelect = (uid: string) => {
+    setSelected((prev) => prev.includes(uid) ? prev.filter((u) => u !== uid) : [...prev, uid]);
+  };
+
+  // Объединить вручную отмеченные задачи (порядок — как в списке задач).
+  const mergeSelected = () => {
+    const uids = tasks.filter((t) => selected.includes(t.uid)).map((t) => t.uid).join(',');
     nav(`/sessions/new?tasks=${encodeURIComponent(uids)}`);
   };
 
@@ -78,6 +90,13 @@ export function TasksPage() {
                   Можно обработать за один раз — ленды объединятся в одну сессию, привязка к задачам сохранится.
                 </div>
               </div>
+              <button
+                className="btn" style={{ fontSize: 12, whiteSpace: 'nowrap' }}
+                title="Отметить задачи группы чекбоксами — лишние можно снять и объединить только нужные"
+                onClick={() => setSelected(g.tasks.map((t) => t.uid))}
+              >
+                Выбрать чекбоксами
+              </button>
               <button className="btn btn-primary" style={{ fontSize: 12, whiteSpace: 'nowrap' }} onClick={() => mergeGroup(g)}>
                 Объединить {g.count} →
               </button>
@@ -86,11 +105,48 @@ export function TasksPage() {
         </div>
       )}
 
+      {selected.length > 0 && (
+        <div
+          style={{
+            position: 'sticky', top: 0, zIndex: 5,
+            display: 'flex', alignItems: 'center', gap: '1rem',
+            padding: '0.7rem 1rem', borderRadius: 8, marginBottom: '0.75rem',
+            border: '1px solid var(--accent, #7c6fff)',
+            background: 'var(--bg-elevated, #141414)',
+          }}
+        >
+          <span style={{ fontSize: 20, display: 'inline-flex' }} title="Выбранные задачи"><Icon name="shuffle" size={18} /></span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 14, fontWeight: 600 }}>
+              Выбрано задач: {selected.length}
+            </div>
+            <div className="dim small" style={{ marginTop: 2 }}>
+              {selected.length < 2
+                ? 'Отметь чекбоксами ещё хотя бы одну задачу, чтобы объединить их в одну сессию.'
+                : 'Выбранные задачи объединятся в одну сессию, привязка лендов к задачам сохранится.'}
+            </div>
+          </div>
+          <button className="btn" style={{ fontSize: 12, whiteSpace: 'nowrap' }} onClick={() => setSelected([])}>
+            Сбросить
+          </button>
+          <button className="btn btn-primary" style={{ fontSize: 12, whiteSpace: 'nowrap' }} disabled={selected.length < 2} onClick={mergeSelected}>
+            Объединить {selected.length} →
+          </button>
+        </div>
+      )}
+
       {!loading && tasks.length === 0 && <p className="dim">Задач нет.</p>}
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
         {tasks.map((t) => (
-          <TaskRow key={t.uid + t.title} t={t} onCreateSession={() => nav(`/sessions/new?task=${encodeURIComponent(t.uid)}`)} onChanged={() => load(true)} />
+          <TaskRow
+            key={t.uid + t.title}
+            t={t}
+            selected={selected.includes(t.uid)}
+            onToggleSelect={() => toggleSelect(t.uid)}
+            onCreateSession={() => nav(`/sessions/new?task=${encodeURIComponent(t.uid)}`)}
+            onChanged={() => load(true)}
+          />
         ))}
       </div>
     </div>
@@ -111,7 +167,9 @@ const FIELD_ORDER: [string, string][] = [
   ['Description', 'Описание'],
 ];
 
-function TaskRow({ t, onCreateSession, onChanged }: { t: TaskSummary; onCreateSession: () => void; onChanged: () => void }) {
+function TaskRow({ t, selected, onToggleSelect, onCreateSession, onChanged }: {
+  t: TaskSummary; selected: boolean; onToggleSelect: () => void; onCreateSession: () => void; onChanged: () => void;
+}) {
   const nav = useNavigate();
   const [open, setOpen] = useState(false);
   const [detail, setDetail] = useState<TaskDetail | null>(null);
@@ -191,6 +249,13 @@ function TaskRow({ t, onCreateSession, onChanged }: { t: TaskSummary; onCreateSe
   return (
     <div style={{ borderRadius: 8, border: '1px solid var(--border, #2a2a2a)', background: 'var(--bg-elevated, #141414)', overflow: 'hidden' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', padding: '0.7rem 1rem' }}>
+        <input
+          type="checkbox"
+          checked={selected}
+          onChange={onToggleSelect}
+          title="Отметить для объединения в одну сессию"
+          style={{ flexShrink: 0, width: 15, height: 15, cursor: 'pointer', accentColor: 'var(--accent, #7c6fff)' }}
+        />
         <button
           onClick={toggle}
           title={open ? 'Свернуть' : 'Развернуть'}

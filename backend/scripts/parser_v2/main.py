@@ -20,6 +20,30 @@ from ._primitives import (
 from ._split import replace_split_text as _split_text, replace_split_price as _split_price
 
 
+def _input_value_by_name(html: str, input_name: str, new_value: str) -> tuple[str, int]:
+    """Заменяет value у <input name="<input_name>"> независимо от порядка
+    атрибутов в теге. Возвращает (html, число реально изменённых значений)."""
+    n_total = 0
+    esc = re.escape(input_name)
+
+    def _sub(m: re.Match) -> str:
+        nonlocal n_total
+        if m.group(2) == new_value:
+            return m.group(0)
+        n_total += 1
+        return m.group(1) + new_value + m.group(3)
+
+    # name=... ... value=...
+    html = re.sub(
+        rf'(<input\b[^>]*\bname=["\']{esc}["\'][^>]*\bvalue=["\'])([^"\']*)(["\'])',
+        _sub, html, flags=re.IGNORECASE)
+    # value=... ... name=...
+    html = re.sub(
+        rf'(<input\b[^>]*\bvalue=["\'])([^"\']*)(["\'][^>]*\bname=["\']{esc}["\'])',
+        _sub, html, flags=re.IGNORECASE)
+    return html, n_total
+
+
 def apply_dom_replacements(html_text: str, rules: list[dict], image_map: dict) -> tuple[str, int]:
     """
     Применяет правила замены с DOM-осведомлённостью.
@@ -149,7 +173,21 @@ def apply_dom_replacements(html_text: str, rules: list[dict], image_map: dict) -
                 n2 += k
             total += n + n2
 
-        # ── Всё остальное (СТРАНА, LANG, INP, CUSTOM, ...) ───────────────────
+        # ── INP_* / EXCL_WORD: value скрытого инпута по ИМЕНИ ────────────────
+        # Дословный find 'name="country" value="GH"' не находил инпуты, где
+        # между name и value стоят другие атрибуты (type="hidden") — country/
+        # language/exclude_word оставались донорскими (кейс 20683 GR).
+        elif label.startswith(('INP_', 'EXCL_WORD')):
+            m_name = re.search(r'name="([^"]+)"', find_str)
+            m_val = re.search(r'value="([^"]*)"', repl_str)
+            if m_name and m_val:
+                result, n = _input_value_by_name(result, m_name.group(1),
+                                                 m_val.group(1))
+            else:
+                result, n = _outside(result, find_str, repl_str)
+            total += n
+
+        # ── Всё остальное (СТРАНА, LANG, CUSTOM, ...) ────────────────────────
         else:
             result, n = _outside(result, find_str, repl_str)
             n2 = 0

@@ -125,55 +125,95 @@ FORM_TOP = """\
 """
 
 def form_bottom(country: str, language: str, exclude_word: str) -> str:
+    # Имя последнего инпута — offerId (camelCase), по регламенту §5.3 AGENT.md.
     return f"""\
     <input type="hidden" name="language" value="{language}">
     <input type="hidden" name="country" value="{country}">
     <input type="hidden" name="exclude_word" value="{exclude_word}">
     <input type="hidden" name="utm_campaign" value="{{offer_id}}">
     <input type="hidden" name="subid" value="{{subid}}">
-    <input type="hidden" name="offer_id" value="{{offer_id}}">
+    <input type="hidden" name="offerId" value="{{offer_id}}">
 """
 
 def body_end(country: str, language: str,
              price_new: str, price_old: str, prod_img: str,
-             exclude_word: str = '') -> str:
-    country_lc  = country.lower()
-    language_lc = language.lower()
+             exclude_word: str = '', product_name: str = '') -> str:
+    # Шаблон по образцу §5.2 AGENT.md: data-widget-variant ПУСТОЙ (= рандомный
+    # вариант; конкретный — только по просьбе баера), обязательный
+    # data-no-analytics; data-offer-id/data-subid в образце нет.
+    prod_name_line = (f'\n    data-product-name="{product_name}"'
+                      if product_name else '')
     return f"""\
 
-<!-- Universal widget combined START  -->
+<!-- Universal widget combined START -->
 <div
-        data-click-data="<?= $clickJson ?>"
-        data-lead-endpoint="./"
-        data-thx-page="main"
-        data-exclude-word="{exclude_word}"
-        data-pixid="{{pixid}}"
-        data-gua="{{gua}}"
-        data-ymc="{{ymc}}"
-        data-offer-id="{{offer_id}}"
-        data-subid="{{subid}}"
-        data-country="{country_lc}"
-        data-language="{language_lc}"
-        data-widget-variant="lead-generator"
-        data-old-price="{price_old}"
-        data-new-price="{price_new}"
-        data-product-image="{prod_img}"
-        id="universal-widget-combined"
+    data-click-data="<?= $clickJson ?>"
+    data-lead-endpoint="./"
+    data-thx-page="main"
+    data-exclude-word="{exclude_word}"
+    data-pixid="{{pixid}}"
+    data-gua="{{gua}}"
+    data-ymc="{{ymc}}"
+    data-country="{country.upper()}"
+    data-language="{language.upper()}"
+    data-widget-variant=""
+    data-old-price="{price_old}"
+    data-new-price="{price_new}"
+    data-product-image="{prod_img}"{prod_name_line}
+    data-no-analytics
+    id="universal-widget-combined"
 ></div>
 <script type="module" src="{{_from_file:widget_2in1_path}}"></script>
-<!-- Universal widget combined END  -->
+<!-- Universal widget combined END -->
 
-
-<!--Маска формы заказа START-->
+<!-- Маска формы заказа START -->
 <script
-        id="form_mask"
-        type="module"
-        src="{{_from_file:form_mask_file_path}}"
-        data-country="{country_lc}"
->
-</script>
-<!--Маска формы заказа END-->
+    id="form_mask"
+    type="module"
+    src="{{_from_file:form_mask_file_path}}"
+    data-country="{country.upper()}"
+></script>
+<!-- Маска формы заказа END -->
 """
+
+
+# ── удаление донорской обвязки (виджет/маска) ────────────────────
+# Донорские ленды из Keitaro несут СВОЙ виджет и маску (чужое гео/цены,
+# локальный бандл universal_widget_combined-*.js) — иногда закомментированные
+# «старые версии». Раньше inject видел id="universal-widget-combined" и мог
+# добавить дубль (или наоборот пропустить вставку, оставив чужие данные).
+# Теперь донорские блоки удаляются, и вставляется РОВНО ОДИН наш комплект.
+# Внутренности тега с учётом кавычек: в значениях атрибутов бывает '>'
+# (data-click-data='<?= $clickJson ?>') — наивный [^>]* режет тег посередине.
+_TAG_INNARDS = r'(?:[^>"\']|"[^"]*"|\'[^\']*\')*'
+
+_STRIP_PATTERNS = [
+    # HTML-комментарии, содержащие виджет целиком (закомментированные версии)
+    re.compile(r'<!--(?:(?!-->).)*?(?:universal-widget-combined|widget_2in1_path)'
+               r'(?:(?!-->).)*?-->', re.S | re.I),
+    # сам див виджета
+    re.compile(r'<div\b' + _TAG_INNARDS + r'id=["\']universal-widget-combined["\']'
+               + _TAG_INNARDS + r'>\s*</div>', re.I),
+    # его загрузчик (макрос или локальный бандл)
+    re.compile(r'<script\b' + _TAG_INNARDS + r'src=["\'][^"\']*(?:widget_2in1_path|'
+               r'universal_widget_combined)[^"\']*["\']' + _TAG_INNARDS
+               + r'>\s*</script>', re.I),
+    # маска формы
+    re.compile(r'<script\b' + _TAG_INNARDS + r'id=["\']form_mask["\']'
+               + _TAG_INNARDS + r'>\s*</script>', re.I),
+    # обёрточные комментарии виджета/маски (наши и донорские)
+    re.compile(r'<!--\s*(?:Universal widget combined|New-widget-|'
+               r'Маска формы заказа|Order form mask)[^>]*?-->', re.I),
+]
+
+
+def strip_widget_blocks(html: str) -> tuple[str, int]:
+    """Удаляет существующие блоки universal-widget/маски. → (html, сколько)."""
+    n = 0
+    for pat in _STRIP_PATTERNS:
+        html, k = pat.subn('', html)
+        n += k
+    return html, n
 
 
 
@@ -236,7 +276,8 @@ def check_present(html: str) -> dict:
         'inp_country':   'name="country"' in html,
         'inp_exclude':   'name="exclude_word"' in html,
         'widget':        ('<!-- Universal widget combined' in html or 'widget_2in1_path' in html or 'id="universal-widget-combined"' in html),
-        'form_mask':     '<!--Маска формы заказа' in html,
+        'form_mask':     ('<!--Маска формы заказа' in html
+                          or 'id="form_mask"' in html),
     }
 
 
@@ -396,8 +437,9 @@ def inject_html(html: str, checks: dict, params: dict) -> tuple[str, list]:
     PHONE_NAMES = {'phone','tel','telephone','telefon','telefono','телефон','mobile'}
     NAME_NAMES  = {'name','fio','fullname','fname','имя','nom','nombre','nome','isim'}
 
-    def patch_input(tag: str, fix_name: str, fix_type: str) -> str:
-        """Ставит нужные name, type, required в тег инпута."""
+    def patch_input(tag: str, fix_name: str, fix_type: str,
+                    add_class: str = '') -> str:
+        """Ставит нужные name, type, required (и класс) в тег инпута."""
         # name
         tag = re.sub(r'name=["\'][^"\']*["\']', f'name="{fix_name}"', tag, flags=re.IGNORECASE)
         if 'name=' not in tag:
@@ -409,6 +451,13 @@ def inject_html(html: str, checks: dict, params: dict) -> tuple[str, list]:
         # required
         if 'required' not in tag:
             tag = tag.rstrip('/>').rstrip() + ' required>'
+        # класс (маска телефона ищет phone-input-1 — регламент §5.3)
+        if add_class and add_class not in tag:
+            if re.search(r'class=["\']', tag, re.IGNORECASE):
+                tag = re.sub(r'(class=["\'])', rf'\g<1>{add_class} ', tag,
+                             count=1, flags=re.IGNORECASE)
+            else:
+                tag = tag.rstrip('/>').rstrip() + f' class="{add_class}">'
         return tag
 
     def fix_form_inputs(html: str) -> tuple[str, bool]:
@@ -425,7 +474,7 @@ def inject_html(html: str, checks: dict, params: dict) -> tuple[str, list]:
             if type_val == 'hidden':
                 return tag
             if name_val in PHONE_NAMES or type_val == 'tel':
-                new_tag = patch_input(tag, 'phone', 'tel')
+                new_tag = patch_input(tag, 'phone', 'tel', add_class='phone-input-1')
             elif name_val in NAME_NAMES or (name_val and name_val not in PHONE_NAMES):
                 new_tag = patch_input(tag, 'name', 'text')
             else:
@@ -442,15 +491,26 @@ def inject_html(html: str, checks: dict, params: dict) -> tuple[str, list]:
     if inp_changed and 'input attrs fixed' not in added:
         added.append('input attrs fixed')
 
+    # ── 7a. Донорский hidden offer_id → offerId (регламент §5.3) ──
+    html, n_oid = re.subn(r'(<input\b[^>]*\bname=["\'])offer_id(["\'])',
+                          r'\g<1>offerId\g<2>', html, flags=re.IGNORECASE)
+    if n_oid:
+        added.append('offer_id → offerId')
+
 
     # ── 6. Universal widget + Маска перед </body> ─────────────
-    if not checks['widget'] or not checks['form_mask']:
+    # Донорские виджет/маска (чужие гео/цены, закомментированные старые
+    # версии) удаляются, вставляется ровно один наш комплект.
+    close_body = html.lower().rfind('</body>')
+    if close_body != -1:
+        html, stripped = strip_widget_blocks(html)
         close_body = html.lower().rfind('</body>')
-        if close_body != -1:
-            html = html[:close_body] + body_end(country, language,
-                                                price_new, price_old, prod_img,
-                                                exclude) + html[close_body:]
-            added.append('Universal widget + Маска формы')
+        html = html[:close_body] + body_end(country, language,
+                                            price_new, price_old, prod_img,
+                                            exclude,
+                                            params.get('product_name', '')) + html[close_body:]
+        added.append('Universal widget + Маска формы'
+                     + (f' (донорских блоков удалено: {stripped})' if stripped else ''))
 
 
 
@@ -633,6 +693,7 @@ def process_zip(zip_path: str, params: dict) -> str:
             zf.extractall(src)
 
         total_added = []
+        html_texts: list[str] = []   # итоговые html — для проверки ссылок на бандлы
 
         for fp in sorted(src.rglob('*')):
             if not fp.is_file():
@@ -654,6 +715,7 @@ def process_zip(zip_path: str, params: dict) -> str:
 
                 new_html, added = inject_html(html, checks, params)
                 dst_fp.write_text(new_html, encoding='utf-8')
+                html_texts.append(new_html)
 
                 if added:
                     ok(f"{rel}  {DIM}+{', '.join(added)}{RESET}")
@@ -663,10 +725,25 @@ def process_zip(zip_path: str, params: dict) -> str:
             else:
                 shutil.copy2(fp, dst_fp)
 
+        # ── Донорский бандл виджета, на который больше нет ссылок ──
+        # (его подключение удалено strip_widget_blocks — файл стал мусором)
+        for fp in list(dst.rglob('universal_widget_combined*.js')):
+            if not any(fp.name in h for h in html_texts):
+                fp.unlink()
+                ok(f"удалён неиспользуемый бандл: {fp.name}")
+
         # ── Создаём api.php в корне если его нет ────────────────
         api_dst = dst / 'api.php'
         existed = api_dst.exists()
-        api_dst.write_text(API_PHP, encoding='utf-8')
+        api_txt = API_PHP
+        # Дефолты страны/языка «Спасибо»-страницы — под целевое гео
+        if params.get('country'):
+            api_txt = re.sub(r"(\$country\s*=\s*isset\(\$_POST\['country'\]\)[^:]*:\s*')[^']*(')",
+                             rf"\g<1>{params['country'].upper()}\g<2>", api_txt)
+        if params.get('language'):
+            api_txt = re.sub(r"(\$language\s*=\s*isset\(\$_POST\['language'\]\)[^:]*:\s*')[^']*(')",
+                             rf"\g<1>{params['language'].upper()}\g<2>", api_txt)
+        api_dst.write_text(api_txt, encoding='utf-8')
         ok(f"api.php  {DIM}({'заменён' if existed else 'создан'}){RESET}")
 
         # Упаковываем

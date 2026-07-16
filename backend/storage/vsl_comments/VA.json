@@ -1,0 +1,148 @@
+{
+ "vertical": "VARICOSIS",
+ "sets": [
+  {
+   "offer_id": 16349,
+   "offer_name": "16349 Elastica [VARICOSIS-PE] [vsl es -] ReactJs 2.0",
+   "geo": "PE",
+   "lang": "es",
+   "comments": [
+    {
+     "index": 0,
+     "name": "Laura García",
+     "text": "¡Muy genial contra las várices, lo voy a probar!",
+     "likes": 85,
+     "avatar": "avatars/11.jpeg",
+     "appearAtPercent": 5,
+     "replies": []
+    },
+    {
+     "index": 1,
+     "name": "Patricia Quispe",
+     "text": "El video me pareció cortito, esperaba más información sobre las várices, pero me gustó y se lo voy a contar a mi esposo.",
+     "likes": 79,
+     "avatar": "avatars/12.jpeg",
+     "appearAtPercent": 12,
+     "replies": []
+    },
+    {
+     "index": 2,
+     "name": "Luis Huamán",
+     "text": "¡Todos los que tienen várices deberían ver esto, lo que revela es increíble, nunca pensé que fuera posible!",
+     "likes": 81,
+     "avatar": "avatars/3.jpeg",
+     "appearAtPercent": 19,
+     "replies": []
+    },
+    {
+     "index": 3,
+     "name": "Alejandro Rojas",
+     "text": "¡Amén! ¡Dios bendiga por esta solución contra las várices!",
+     "likes": 66,
+     "avatar": "avatars/4.jpeg",
+     "appearAtPercent": 26,
+     "replies": []
+    },
+    {
+     "index": 4,
+     "name": "María López",
+     "text": "Dios bendiga a este hombre por ayudarnos con el problema de las várices.",
+     "likes": 50,
+     "avatar": "avatars/13.jpeg",
+     "appearAtPercent": 33,
+     "replies": []
+    },
+    {
+     "index": 5,
+     "name": "Andrea Flores",
+     "text": "De verdad espero que funcione para eliminar las várices, ¡he probado tantas cosas! Pero esto tiene todo el sentido.",
+     "likes": 47,
+     "avatar": "avatars/14.jpeg",
+     "appearAtPercent": 40,
+     "replies": [
+      {
+       "index": 0,
+       "name": "Miguel Torres",
+       "text": "¡Increíble @Andrea! Empiezo hoy... yo también tengo problemas con las várices.",
+       "avatar": "avatars/7.jpeg",
+       "likes": 41,
+       "appearAtPercent": 47
+      }
+     ]
+    },
+    {
+     "index": 6,
+     "name": "Carlos Mendoza",
+     "text": "Nunca había escuchado algo así contra las várices, parecía raro pero tiene mucho sentido... ya empecé a probarlo, ¡y está funcionando desde los primeros días!",
+     "likes": 40,
+     "avatar": "avatars/2.jpeg",
+     "appearAtPercent": 50,
+     "replies": []
+    },
+    {
+     "index": 7,
+     "name": "Ana Vargas",
+     "text": "¿De verdad funciona contra las várices? Quiero mostrárselo a mi esposo.",
+     "likes": 18,
+     "avatar": "avatars/9.jpeg",
+     "appearAtPercent": 58,
+     "replies": [
+      {
+       "index": 0,
+       "name": "Daniela Chávez",
+       "text": "Sí @Ana, de verdad funciona, yo soy la prueba viviente... Sufría de várices desde hace años... gracias a este video por fin encontré una solución. Toda mi familia está emocionada. Comparto este video todos los días.",
+       "avatar": "avatars/15.jpeg",
+       "likes": 22,
+       "appearAtPercent": 62
+      }
+     ]
+    },
+    {
+     "index": 8,
+     "name": "Juan Paredes",
+     "text": "La solución contra las várices siempre estuvo ahí... pero nadie la veía, ¡muchas gracias, trajiste luz y esperanza!",
+     "likes": 17,
+     "avatar": "avatars/5.jpeg",
+     "appearAtPercent": 68,
+     "replies": []
+    },
+    {
+     "index": 9,
+     "name": "Francisco Soto",
+     "text": "No me gustó la edición del video... ¡pero lo entiendo perfectamente! Creo en todo lo que dice sobre las várices.",
+     "likes": 15,
+     "avatar": "avatars/10.jpeg",
+     "appearAtPercent": 75,
+     "replies": []
+    },
+    {
+     "index": 10,
+     "name": "María Díaz",
+     "text": "Voy a enviar este video a otras personas, conozco gente con várices crónicas a quienes este video les puede ayudar a mejorar su calidad de vida.",
+     "likes": 11,
+     "avatar": "avatars/9.jpeg",
+     "appearAtPercent": 82,
+     "replies": []
+    },
+    {
+     "index": 11,
+     "name": "Julio Castillo",
+     "text": "Apenas empecé a ver este video ya me dio una nueva forma de pensar sobre el problema de las várices.",
+     "likes": 9,
+     "avatar": "avatars/8.jpeg",
+     "appearAtPercent": 89,
+     "replies": []
+    },
+    {
+     "index": 12,
+     "name": "Mario Gutiérrez",
+     "text": "Esto es un poco controversial, pero creo que vale la pena verlo para formarse una opinión sobre las várices...",
+     "likes": 8,
+     "avatar": "avatars/1.jpeg",
+     "appearAtPercent": 95,
+     "replies": []
+    }
+   ]
+  }
+ ]
+}

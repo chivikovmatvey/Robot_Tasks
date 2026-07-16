@@ -59,6 +59,7 @@ class KeitaroClient:
         headless: bool = True,
         state_path: Optional[str] = None,
         timeout_ms: int = 45_000,
+        proxy: Optional[dict] = None,
     ):
         if not base_url:
             raise KeitaroError("base_url пуст (заполни KEITARO_BASE_URL в .env)")
@@ -69,6 +70,9 @@ class KeitaroClient:
         # Файл с cookie-сессией — чтобы не логиниться каждый запуск.
         self.state_path = Path(state_path) if state_path else None
         self.timeout_ms = timeout_ms
+        # Playwright-proxy {server, username?, password?} — обход провайдерских
+        # обрывов TLS к Cloudflare (tlgk.host за CF; см. KEITARO_PROXY в .env).
+        self.proxy = proxy
 
         self._pw: Optional[Playwright] = None
         self._browser: Optional[Browser] = None
@@ -83,7 +87,10 @@ class KeitaroClient:
     # ── lifecycle ────────────────────────────────────────────────
     def __enter__(self) -> "KeitaroClient":
         self._pw = sync_playwright().start()
-        self._browser = self._pw.chromium.launch(headless=self.headless)
+        launch_kwargs: dict = {"headless": self.headless}
+        if self.proxy:
+            launch_kwargs["proxy"] = self.proxy
+        self._browser = self._pw.chromium.launch(**launch_kwargs)
         ctx_kwargs: dict = {"accept_downloads": True}
         if self.state_path and self.state_path.exists():
             ctx_kwargs["storage_state"] = str(self.state_path)
@@ -91,8 +98,9 @@ class KeitaroClient:
         self._ctx.set_default_timeout(self.timeout_ms)
         self._page = self._ctx.new_page()
         self._attach_page_logging(self._page)
-        log.info("Keitaro: браузер запущен (headless=%s, base=%s)",
-                 self.headless, self.base_url)
+        log.info("Keitaro: браузер запущен (headless=%s, base=%s, proxy=%s)",
+                 self.headless, self.base_url,
+                 (self.proxy or {}).get("server", "нет"))
         return self
 
     def _attach_page_logging(self, page: Page) -> None:
@@ -261,8 +269,84 @@ class KeitaroClient:
         self._dump_debug("offers-grid-not-loaded")
         raise KeitaroError(f"Не удалось открыть грид офферов (#!/offers/): {last_err}")
 
+    # ── внутренний JSON-API грида ────────────────────────────────
+    def _offers_api(self, filters: list[dict], *, limit: int = 10) -> list[dict]:
+        """POST /?object=offers.withStats — тот же эндпоинт, которым SPA-грид
+        получает строки (авторизация — cookie браузерного контекста).
+
+        В отличие от поля поиска над гридом (оно шлёт ТОЛЬКО
+        {"name":"name","operator":"CONTAINS"} — ищет по названию!), здесь можно
+        фильтровать по РЕАЛЬНОМУ id: {"name":"id","operator":"EQUALS"|"IN_LIST"}.
+        Возвращает rows: [{id, name, group, country, affiliate_network, ...}].
+        """
+        import json as _json
+        body = {
+            "range": {"interval": "today", "timezone": "Europe/Moscow"},
+            "columns": ["id", "name", "group"],
+            "metrics": ["country", "affiliate_network"],
+            "grouping": [],
+            "filters": filters,
+            "sort": [{"name": "id", "order": "desc"}],
+            "summary": False,
+            "limit": limit,
+            "offset": 0,
+            "extended": True,
+        }
+        r = self.page.request.post(
+            f"{self.base_url}/?object=offers.withStats",
+            data=_json.dumps(body),
+            headers={"Content-Type": "application/json"},
+        )
+        if r.status != 200:
+            raise KeitaroError(f"offers.withStats: HTTP {r.status}")
+        data = r.json()
+        rows = data.get("rows") if isinstance(data, dict) else None
+        if not isinstance(rows, list):
+            raise KeitaroError(f"offers.withStats: неожиданный ответ {str(data)[:120]}")
+        return rows
+
+    def _names_by_ids_api(self, offer_ids: list[str]) -> dict[str, str]:
+        """Названия офферов по РЕАЛЬНЫМ id одним запросом внутреннего API.
+        Отсутствующий в ответе id = оффера с таким id нет."""
+        self.login()
+        rows = self._offers_api(
+            [{"name": "id", "operator": "IN_LIST", "expression": offer_ids}],
+            limit=max(len(offer_ids) + 5, 10),
+        )
+        return {str(r.get("id")): (r.get("name") or "").strip() for r in rows}
+
+    def _filter_grid_by_api_name(self, offer_id: int | str) -> str:
+        """Фолбэк, когда фильтр грида по id ничего не нашёл: берём точное
+        название оффера по РЕАЛЬНОМУ id через внутренний API и фильтруем грид
+        по названию. Кейс: человек при переименовании вписал в название чужой
+        номер (оффер 16069 назван «16066 A-man …») — поиск по «16069» пуст,
+        хотя оффер существует. Возвращает название; бросает KeitaroError,
+        если оффера с таким id нет вообще."""
+        key = str(offer_id).strip()
+        try:
+            found = self._names_by_ids_api([key])
+        except Exception as e:  # noqa: BLE001
+            raise KeitaroError(
+                f"Оффер {offer_id} не найден фильтром грида, "
+                f"и API-фолбэк не ответил: {e}")
+        name = found.get(key, "")
+        if not name:
+            raise KeitaroError(
+                f"Оффера с id {offer_id} НЕТ в Keitaro (проверь ID в задаче)")
+        log.warning(
+            "Оффер %s существует, но его название «%s» не содержит id "
+            "(опечатка при переименовании?) — фильтрую грид по названию",
+            offer_id, name)
+        self._name_cache[key] = name
+        self._apply_grid_filter(name)
+        return name
+
     def _find_offer_row(self, offer_id: int | str):
-        """Возвращает локатор строки грида для оффера с данным KT-id."""
+        """Возвращает локатор строки грида для оффера с данным KT-id.
+
+        Поле поиска грида ищет ТОЛЬКО по названию (name CONTAINS) — обычно этого
+        хватает, т.к. название начинается с id. Если пусто — фолбэк через
+        внутренний API по РЕАЛЬНОМУ id (см. _filter_grid_by_api_name)."""
         page = self.page
         # Фильтр грида сужает выдачу (грид постраничный, 16k+ офферов).
         filt = page.locator(self._GRID_FILTER).first
@@ -274,8 +358,13 @@ class KeitaroClient:
         try:
             edit_link.wait_for(state="visible", timeout=15_000)
         except PWTimeout:
-            self._dump_debug(f"offer-{offer_id}-not-found")
-            raise KeitaroError(f"Оффер {offer_id} не найден в гриде после фильтра")
+            self._filter_grid_by_api_name(offer_id)
+            try:
+                edit_link.wait_for(state="visible", timeout=15_000)
+            except PWTimeout:
+                self._dump_debug(f"offer-{offer_id}-not-found")
+                raise KeitaroError(
+                    f"Оффер {offer_id} не найден в гриде даже по названию")
         # Строка-предок этой ссылки.
         return page.locator(
             f'tr.grid-tbody-row:has(a[href$="/editor/offer/{offer_id}"])'
@@ -304,6 +393,20 @@ class KeitaroClient:
         if key in self._name_cache:  # снято при download_offer — без 2-го прохода
             return self._name_cache[key]
         self.login()
+        # Быстрый путь: внутренний API по реальному id (без прохода по гриду;
+        # находит и офферы, чьё название не содержит id — опечатки).
+        try:
+            found = self._names_by_ids_api([key])
+            name = found.get(key, "")
+            if name:
+                self._name_cache[key] = name
+                return name
+            raise KeitaroError(f"Оффера с id {offer_id} НЕТ в Keitaro")
+        except KeitaroError:
+            raise
+        except Exception as e:  # noqa: BLE001
+            log.warning("get_offer_name(%s): API-путь не сработал (%s) — иду по гриду",
+                        key, e)
         self._open_offers()
         row = self._find_offer_row(offer_id)
         name = self._extract_offer_name(row.inner_text() or "", offer_id)
@@ -313,16 +416,27 @@ class KeitaroClient:
     def get_offer_names(self, offer_ids) -> dict[str, str | None]:
         """Названия для нескольких офферов за ОДИН сеанс браузера.
 
-        Логинимся и открываем грид один раз, далее по каждому id меняем фильтр.
-        Сбой по отдельному id не валит весь батч (значение = None).
+        Быстрый путь: ОДИН запрос внутреннего API по списку реальных id
+        (offers.withStats IN_LIST). Отсутствие id в ответе = такого оффера нет
+        (None). Фолбэк — старый проход по гриду с фильтром по каждому id.
         """
+        keys = [k for k in (str(o).strip() for o in offer_ids) if k]
+        if not keys:
+            return {}
         self.login()
+        try:
+            found = self._names_by_ids_api(keys)
+            out: dict[str, str | None] = {}
+            for k in keys:
+                out[k] = found.get(k) or None
+                if out[k]:
+                    self._name_cache[k] = out[k]
+            return out
+        except Exception as e:  # noqa: BLE001
+            log.warning("get_offer_names: API-путь не сработал (%s) — иду по гриду", e)
         self._open_offers()
-        out: dict[str, str | None] = {}
-        for oid in offer_ids:
-            key = str(oid).strip()
-            if not key:
-                continue
+        out = {}
+        for key in keys:
             try:
                 row = self._find_offer_row(key)
                 out[key] = self._extract_offer_name(row.inner_text() or "", key)
@@ -662,7 +776,9 @@ class KeitaroClient:
             raise KeitaroError("Не удалось загрузить ZIP-архив")
         # Архив грузится на сервер (XHR) — дожидаемся завершения, иначе «Создать»
         # сработает с ошибкой «загрузите файл». Ждём появления имени файла /
-        # исчезновения прогресса; фолбэк — увеличенная пауза.
+        # исчезновения прогресса; фолбэк — увеличенная пауза. Лимит большой:
+        # через прокси (KEITARO_PROXY) крупный zip может грузиться минуты,
+        # а wait_for_function завершается сразу, как только загрузка прошла.
         try:
             page.wait_for_function(
                 """() => {
@@ -671,7 +787,7 @@ class KeitaroClient:
                         (document.querySelector('.progress, [class*=progress]')||{}).textContent||'');
                     return !uploading && /\\.zip/i.test(t);
                 }""",
-                timeout=20_000,
+                timeout=240_000,
             )
         except Exception:  # noqa: BLE001
             page.wait_for_timeout(4000)  # фолбэк, если эвристика не сработала
@@ -696,7 +812,9 @@ class KeitaroClient:
         # Заливка большого ZIP может идти долго → опрашиваем закрытие модалки
         # циклом: проверили → если открыта, ждём 2.5с → перепроверили (до 60с).
         _step("Проверяю, что оффер создан (модалка закрылась)")
-        if not self._wait_modal_closed("Создание оффера", total_ms=60_000):
+        # 300с: через прокси сохранение с большим zip идёт долго; опрос выходит
+        # раньше, как только модалка закрылась.
+        if not self._wait_modal_closed("Создание оффера", total_ms=300_000):
             errs = self._collect_modal_errors()
             self._dump_debug("create-not-submitted")
             self._shot("07-create-failed")
@@ -831,6 +949,97 @@ class KeitaroClient:
         except Exception:  # noqa: BLE001
             return []
 
+    def _set_grid_page_size(self, size: int = 1000) -> None:
+        """Размер страницы грида: react-select `data-test-id="size-select"`
+        (дефолт 250 — при 748 офферах теряли 2/3 грида). Меню открывается
+        ВВЕРХ (menu-placement=top), опции — [id*="option"], как в groups-select."""
+        page = self.page
+        try:
+            sel = page.locator('[data-test-id="size-select"]').first
+            if str(size) == sel.inner_text(timeout=3_000).strip():
+                return
+            sel.click(timeout=5_000)
+            page.wait_for_timeout(400)
+            opts = page.locator('[id*="option"]')
+            for i in range(opts.count()):
+                if opts.nth(i).inner_text().strip() == str(size):
+                    opts.nth(i).click()
+                    page.wait_for_timeout(self._GRID_SETTLE_MS)
+                    return
+            page.keyboard.press("Escape")
+            log.warning("В size-select нет опции %d", size)
+        except Exception:  # noqa: BLE001
+            log.warning("Не удалось выбрать размер страницы грида %d", size)
+
+    def _grid_total(self) -> Optional[int]:
+        """Всего строк по фильтру — из статуса пагинации «1 - 250 из 748»."""
+        try:
+            txt = self.page.locator("grid-pagination-status").first.inner_text(timeout=2_000)
+            m = re.search(r"из\s+(\d+)", txt)
+            return int(m.group(1)) if m else None
+        except Exception:  # noqa: BLE001
+            return None
+
+    def list_offers(self, query: str) -> list[dict]:
+        """ВСЕ офферы грида по фильтру `query` → [{id, name}].
+
+        Размер страницы ставим 1000 (дефолт 250 скрывал часть); грид
+        виртуализирован — скроллим до конца; если записей больше страницы,
+        листаем стрелкой «вперёд» пагинации."""
+        self.login()
+        self._open_offers()
+        self._apply_grid_filter(query)
+        try:
+            self.page.wait_for_selector('a[href*="/editor/offer/"]', timeout=15_000)
+        except PWTimeout:
+            return []
+        self.page.wait_for_timeout(self._GRID_SETTLE_MS)
+        self._set_grid_page_size(1000)
+
+        total = self._grid_total()
+        seen: dict[int, str] = {}
+
+        def _collect_page() -> None:
+            stale_rounds = 0
+            for _ in range(80):  # предохранитель от бесконечного скролла
+                added = 0
+                for href, text in self._grid_rows_data():
+                    m = re.search(r"/editor/offer/(\d+)", href or "")
+                    if not m:
+                        continue
+                    oid = int(m.group(1))
+                    if oid not in seen:
+                        seen[oid] = self._extract_offer_name(text or "", oid).strip()
+                        added += 1
+                if added == 0:
+                    stale_rounds += 1
+                    if stale_rounds >= 2:  # два скролла без новых строк — конец
+                        break
+                else:
+                    stale_rounds = 0
+                self.page.keyboard.press("End")
+                self.page.mouse.wheel(0, 4000)
+                self.page.wait_for_timeout(700)
+
+        for _page_i in range(20):  # максимум 20 страниц (20k строк)
+            _collect_page()
+            if total and len(seen) >= total:
+                break
+            # следующая страница, если стрелка «вперёд» активна
+            try:
+                nxt = self.page.locator(
+                    "grid-pagination button:has(.ion-ios-arrow-right)").first
+                if nxt.is_disabled():
+                    break
+                nxt.click(timeout=3_000)
+                self.page.wait_for_timeout(self._GRID_SETTLE_MS)
+            except Exception:  # noqa: BLE001
+                break
+        if total and len(seen) < total:
+            log.warning("list_offers('%s'): собрано %d из %d строк грида",
+                        query, len(seen), total)
+        return [{"id": oid, "name": name} for oid, name in seen.items()]
+
     def rename_offer(self, offer_id: int | str, new_name: str, *,
                      country_query: str = "", country_name: str = "") -> None:
         """Переименовывает оффер (дописывает id в название).
@@ -852,8 +1061,15 @@ class KeitaroClient:
         try:
             page.wait_for_selector(f'a[href$="/editor/offer/{offer_id}"]', timeout=15_000)
         except PWTimeout:
-            self._dump_debug("rename-offer-notfound")
-            raise KeitaroError(f"Оффер {offer_id} не найден для переименования")
+            # Свежесозданный оффер ещё БЕЗ id в названии, а поиск грида ищет
+            # только по названию — берём точное название по id через API.
+            try:
+                self._filter_grid_by_api_name(offer_id)
+                page.wait_for_selector(
+                    f'a[href$="/editor/offer/{offer_id}"]', timeout=15_000)
+            except Exception:  # noqa: BLE001
+                self._dump_debug("rename-offer-notfound")
+                raise KeitaroError(f"Оффер {offer_id} не найден для переименования")
         page.wait_for_timeout(500)
 
         row = page.locator(
@@ -1054,17 +1270,28 @@ class KeitaroClient:
             copy_btn.click()
             page.wait_for_timeout(500)
 
+            # Через прокси ссылка появляется с задержкой — опрашиваем до 15с
+            # (буфер обмена + DOM-фолбэк), перещёлкивая «копировать».
             link = ""
-            try:
-                link = page.evaluate("navigator.clipboard.readText()") or ""
-            except Exception:  # noqa: BLE001
-                log.warning("Буфер обмена недоступен — ищу ссылку в DOM")
-            if not link.startswith("http"):
-                # Фолбэк: видимое поле/элемент со ссылкой кампании на странице.
-                link = page.evaluate(
-                    "() => { const i = [...document.querySelectorAll('input')]"
-                    ".find(x => /^https?:\\/\\//.test(x.value || '') && !/admin/.test(x.value));"
-                    " return i ? i.value : ''; }") or ""
+            deadline = time.monotonic() + 15
+            while not link.startswith("http"):
+                try:
+                    link = page.evaluate("navigator.clipboard.readText()") or ""
+                except Exception:  # noqa: BLE001
+                    pass
+                if not link.startswith("http"):
+                    # Фолбэк: видимое поле/элемент со ссылкой кампании на странице.
+                    link = page.evaluate(
+                        "() => { const i = [...document.querySelectorAll('input')]"
+                        ".find(x => /^https?:\\/\\//.test(x.value || '') && !/admin/.test(x.value));"
+                        " return i ? i.value : ''; }") or ""
+                if link.startswith("http") or time.monotonic() >= deadline:
+                    break
+                page.wait_for_timeout(1_500)
+                try:
+                    copy_btn.click()
+                except Exception:  # noqa: BLE001
+                    pass
             if not link.startswith("http"):
                 self._dump_debug("campaign-no-link")
                 raise KeitaroError(
@@ -1091,6 +1318,65 @@ class KeitaroClient:
             pass
 
 
+def _probe(base_url: str, proxy_raw: Optional[str] = None,
+           timeout: float = 5.0) -> bool:
+    """Быстрая проверка, отвечает ли Keitaro (напрямую или через прокси)."""
+    import requests
+    try:
+        kw: dict = {"timeout": timeout, "allow_redirects": False}
+        if proxy_raw:
+            kw["proxies"] = {"http": proxy_raw, "https": proxy_raw}
+        r = requests.head(base_url, **kw)
+        return r.status_code < 500
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _proxy_from_env() -> Optional[dict]:
+    """Адаптивный выбор прокси для Keitaro-браузера.
+
+    Сеть нестабильна в ОБЕ стороны (то провайдер режет TLS к Cloudflare —
+    нужен прокси, то прокси умирает — нужен директ), поэтому на каждый запуск:
+    1) прямое соединение живо → БЕЗ прокси (быстрее всего);
+    2) иначе KEITARO_PROXY (raw-строка или id/label из storage/proxies.json);
+    3) прокси из .env тоже мёртв → параллельный перебор всех сохранённых,
+       берём первый ответивший.
+    """
+    base_url = os.environ.get("KEITARO_BASE_URL", "https://tlgk.host/admin")
+    if _probe(base_url):
+        log.info("Keitaro отвечает напрямую — работаю без прокси")
+        return None
+
+    from services.proxies import get_store, parse_proxy
+    store = get_store()
+
+    value = os.environ.get("KEITARO_PROXY", "").strip()
+    # label/id из стора → raw; иначе значение само по себе raw-строка
+    preferred_raw = store.get_raw(value) or (value if parse_proxy(value) else None)
+
+    if preferred_raw and _probe(base_url, preferred_raw):
+        log.info("Keitaro через прокси из KEITARO_PROXY")
+        return parse_proxy(preferred_raw)
+
+    # Перебор всех сохранённых прокси параллельно — первый живой.
+    from concurrent.futures import ThreadPoolExecutor
+    candidates = store.list_raw()
+    if candidates:
+        with ThreadPoolExecutor(max_workers=min(16, len(candidates))) as ex:
+            results = list(ex.map(
+                lambda c: (c[0], c[1], _probe(base_url, c[1], timeout=6)),
+                candidates))
+        for label, raw, ok in results:
+            if ok:
+                log.warning("Прямое соединение и KEITARO_PROXY мертвы — "
+                            "переключился на сохранённый прокси «%s»", label)
+                return parse_proxy(raw)
+
+    log.error("Keitaro недоступен ни напрямую, ни через один из %d прокси",
+              len(candidates) + (1 if preferred_raw else 0))
+    return None
+
+
 def client_from_env(**overrides) -> KeitaroClient:
     """Создаёт KeitaroClient из переменных окружения (.env).
 
@@ -1103,6 +1389,8 @@ def client_from_env(**overrides) -> KeitaroClient:
         password=os.environ.get("KEITARO_PASSWORD", ""),
         headless=os.environ.get("KEITARO_HEADLESS", "1") != "0",
         state_path=str(storage / "session.json"),
+        proxy=_proxy_from_env(),
+        timeout_ms=int(os.environ.get("KEITARO_TIMEOUT_MS", "90000")),
     )
     kwargs.update(overrides)
     return KeitaroClient(**kwargs)

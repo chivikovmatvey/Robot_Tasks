@@ -43,6 +43,7 @@ export function NewSessionPage() {
   const isMulti = taskUids.length > 1;
 
   const [offer, setOffer] = useState('');
+  const [isVsl, setIsVsl] = useState(false);
   const [idsText, setIdsText] = useState('');
   const [urlsText, setUrlsText] = useState('');
   const [sourceTasks, setSourceTasks] = useState<SourceTask[]>([]);
@@ -84,7 +85,7 @@ export function NewSessionPage() {
     if (isMulti) {
       setBusy(true); setError(''); setStatus('Создаю объединённую сессию…');
       try {
-        const s = await api.createSession({ task_uids: taskUids, offer: offer || undefined });
+        const s = await api.createSession({ task_uids: taskUids, offer: offer || undefined, vsl: isVsl });
         nav(`/sessions/${s.id}`);
       } catch (e: any) {
         setError(e.message || 'Ошибка создания сессии');
@@ -97,7 +98,7 @@ export function NewSessionPage() {
 
     const ids = parseIdsInput(idsText);
     const urls = parseUrlsInput(urlsText);
-    if (ids.length === 0 && files.length === 0 && urls.length === 0) {
+    if (!isVsl && ids.length === 0 && files.length === 0 && urls.length === 0) {
       setError('Укажи ID ленда, ссылку на лендинг или загрузи архив');
       return;
     }
@@ -107,6 +108,7 @@ export function NewSessionPage() {
         task_uid: taskUid || undefined,
         lander_ids: ids,
         offer: offer || undefined,
+        vsl: isVsl,
       });
       for (let i = 0; i < files.length; i++) {
         setStatus(`Загружаю архив ${i + 1}/${files.length}…`);
@@ -163,9 +165,15 @@ export function NewSessionPage() {
         </div>
       )}
 
-      <label style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: '1rem' }}>
+      <label style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: '0.75rem' }}>
         <span className="dim" style={{ fontSize: 12 }}>Целевой оффер</span>
         <input className="form-input" value={offer} onChange={(e) => setOffer(e.target.value)} placeholder="VA Ultravix Low MX" />
+      </label>
+
+      <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: '1rem', cursor: 'pointer', fontSize: 13 }}>
+        <input type="checkbox" checked={isVsl} onChange={(e) => setIsVsl(e.target.checked)} />
+        <span>VSL-сессия</span>
+        <span className="dim small">— видео-ленд: работа через config.php, в сессию сразу добавится эталонный шаблон 19201</span>
       </label>
 
       {!isMulti && <>

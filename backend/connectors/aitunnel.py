@@ -61,21 +61,68 @@ DEFAULT_MODELS = [
 ]
 
 
+# ── локальная модель (Ollama / vLLM / llama.cpp — любой OpenAI-совм. сервер) ──
+# Опциональна: если сервер отвечает — модель появляется в списке и становится
+# дефолтом чата (бесплатно/приватно). Не отвечает — работаем только через AITUNNEL.
+LOCAL_PREFIX = "local:"
+DEFAULT_LOCAL_BASE_URL = "http://localhost:11434/v1"  # Ollama
+
+_local_cache: dict = {"ts": 0.0, "info": None}
+_LOCAL_TTL = 30.0  # сек — не дёргать /models на каждый запрос статуса
+
+
+def local_base_url() -> str:
+    return (os.getenv("LOCAL_LLM_BASE_URL", "").strip()
+            or DEFAULT_LOCAL_BASE_URL).rstrip("/")
+
+
+def local_llm_info(force: bool = False) -> Optional[dict]:
+    """Проверяет локальный OpenAI-совместимый сервер. → {base_url, model} | None.
+
+    Модель: LOCAL_LLM_MODEL из .env, иначе первая из GET /models.
+    Результат кэшируется на 30с (эндпоинт статуса зовётся часто)."""
+    now = time.time()
+    if not force and now - _local_cache["ts"] < _LOCAL_TTL:
+        return _local_cache["info"]
+    info = None
+    base = local_base_url()
+    try:
+        r = requests.get(f"{base}/models", timeout=2)
+        if r.ok:
+            ids = [m.get("id") for m in (r.json().get("data") or []) if m.get("id")]
+            model = os.getenv("LOCAL_LLM_MODEL", "").strip() or (ids[0] if ids else "")
+            if model:
+                info = {"base_url": base, "model": model}
+    except Exception:  # noqa: BLE001 — сервер не поднят, это норма
+        info = None
+    _local_cache.update(ts=now, info=info)
+    return info
+
+
 def available_models() -> list[dict]:
-    """Список моделей для выбора в UI (из AITUNNEL_MODELS или дефолт)."""
+    """Список моделей для выбора в UI (из AITUNNEL_MODELS или дефолт).
+
+    Если доступен локальный сервер — его модель добавляется ПЕРВОЙ
+    (id с префиксом 'local:', в чате она станет дефолтом)."""
     raw = os.getenv("AITUNNEL_MODELS", "").strip()
     if not raw:
-        return DEFAULT_MODELS
-    out: list[dict] = []
-    for part in raw.split(","):
-        part = part.strip()
-        if not part:
-            continue
-        mid, _, label = part.partition(":")
-        mid = mid.strip()
-        if mid:
-            out.append({"id": mid, "label": (label.strip() or mid)})
-    return out or DEFAULT_MODELS
+        out = list(DEFAULT_MODELS)
+    else:
+        out = []
+        for part in raw.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            mid, _, label = part.partition(":")
+            mid = mid.strip()
+            if mid:
+                out.append({"id": mid, "label": (label.strip() or mid)})
+        out = out or list(DEFAULT_MODELS)
+    local = local_llm_info()
+    if local:
+        out.insert(0, {"id": LOCAL_PREFIX + local["model"],
+                       "label": f"Локальная — {local['model']} (бесплатно)"})
+    return out
 
 
 class AITunnelError(RuntimeError):
@@ -106,6 +153,32 @@ class AITunnelClient:
             "Content-Type": "application/json",
         })
 
+    def _route(self, model: Optional[str]) -> tuple[str, str]:
+        """(модель, base_url) для запроса: id с префиксом 'local:' идёт на
+        локальный сервер (Ollama/vLLM), остальное — на AITUNNEL."""
+        mdl = (model or self.model or "").strip()
+        if mdl.startswith(LOCAL_PREFIX):
+            return mdl[len(LOCAL_PREFIX):], local_base_url()
+        return mdl, self.base_url
+
+    def _timeout_for(self, api_base: str) -> int:
+        """Локальная модель на слабом GPU долго прожёвывает длинный промпт
+        (первый запрос ещё и грузит веса в VRAM) — таймаут щедрее облачного."""
+        if api_base == local_base_url():
+            return int(os.getenv("LOCAL_LLM_TIMEOUT", "600") or "600")
+        return self.timeout
+
+    @staticmethod
+    def _tune_local(payload: dict, api_base: str) -> None:
+        """Локальные ризонеры (qwen3.5 в Ollama): без reasoning_effort весь
+        лимит токенов уходит в размышления и content пустой. Дефолт 'none'
+        (скорость важнее), переопределяется LOCAL_LLM_REASONING."""
+        if api_base != local_base_url():
+            return
+        effort = os.getenv("LOCAL_LLM_REASONING", "none").strip() or "none"
+        if effort != "off":  # LOCAL_LLM_REASONING=off — не слать параметр вовсе
+            payload["reasoning_effort"] = effort
+
     # ── chat completions ─────────────────────────────────────────
     def chat(
         self,
@@ -122,8 +195,9 @@ class AITunnelClient:
         message — dict ассистента {role, content, tool_calls?} как в OpenAI.
         response_format — напр. {"type": "json_object"} для строгого JSON.
         """
+        mdl, api_base = self._route(model)
         payload: dict = {
-            "model": model or self.model,
+            "model": mdl,
             "messages": messages,
             "temperature": temperature,
             "max_tokens": max_tokens,
@@ -133,13 +207,15 @@ class AITunnelClient:
             payload["tool_choice"] = tool_choice or "auto"
         if response_format:
             payload["response_format"] = response_format
+        self._tune_local(payload, api_base)
 
-        url = f"{self.base_url}/chat/completions"
+        url = f"{api_base}/chat/completions"
         r = None
         last_err: Optional[Exception] = None
         for attempt in range(NET_RETRIES):
             try:
-                r = self.session.post(url, json=payload, timeout=self.timeout)
+                r = self.session.post(url, json=payload,
+                                      timeout=self._timeout_for(api_base))
                 break
             except requests.RequestException as e:
                 last_err = e
@@ -184,8 +260,9 @@ class AITunnelClient:
         """Стриминговый /chat/completions (SSE). Yield-ит сырые chunk-словари
         (OpenAI-формат: choices[0].delta с content/tool_calls)."""
         import json
+        mdl, api_base = self._route(model)
         payload: dict = {
-            "model": model or self.model,
+            "model": mdl,
             "messages": messages,
             "temperature": temperature,
             "max_tokens": max_tokens,
@@ -194,13 +271,15 @@ class AITunnelClient:
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = tool_choice or "auto"
+        self._tune_local(payload, api_base)
 
-        url = f"{self.base_url}/chat/completions"
+        url = f"{api_base}/chat/completions"
         r = None
         last_err: Optional[Exception] = None
         for attempt in range(NET_RETRIES):
             try:
-                r = self.session.post(url, json=payload, stream=True, timeout=self.timeout)
+                r = self.session.post(url, json=payload, stream=True,
+                                      timeout=self._timeout_for(api_base))
                 break
             except requests.RequestException as e:
                 last_err = e
@@ -316,10 +395,18 @@ class AITunnelClient:
 
 
 def client_from_env() -> Optional[AITunnelClient]:
-    """Создаёт клиент из .env. None, если ключ не задан."""
+    """Создаёт клиент из .env. None, если нет ни ключа AITUNNEL, ни локальной
+    модели. Без ключа, но с локальным сервером — работаем только локально."""
     key = os.getenv("AITUNNEL_API_KEY", "").strip()
     if not key:
-        return None
+        local = local_llm_info()
+        if local is None:
+            return None
+        return AITunnelClient(
+            api_key="local",  # локальным серверам ключ не нужен
+            base_url=os.getenv("AITUNNEL_BASE_URL", DEFAULT_BASE_URL).strip() or DEFAULT_BASE_URL,
+            model=LOCAL_PREFIX + local["model"],
+        )
     return AITunnelClient(
         api_key=key,
         base_url=os.getenv("AITUNNEL_BASE_URL", DEFAULT_BASE_URL).strip() or DEFAULT_BASE_URL,

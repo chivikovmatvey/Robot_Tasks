@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from typing import Optional
 
@@ -40,10 +41,16 @@ SYSTEM_PROMPT = """\
 - Чтобы выполнить адаптацию — adapt_lander с параметрами. В image_map ключ это
   имя файла НА ленде, значение — имя файла-замены (из списка replacements/assets).
   Пустой image_map = медиа не меняем (остаётся оригинал).
-- Для правок кода адаптированного ленда (после adapt_lander): list_files →
-  read_file → edit_file (точечная замена find→replace). Перед edit_file ВСЕГДА
-  читай файл, чтобы строка find точно совпадала. Правки идут в выходной архив,
-  результат сразу виден в превью. Пример запроса: «поменяй form_sale на grid».
+- «Поменяй X на Y» (одна или НЕСКОЛЬКО пар текстов) → СРАЗУ вызывай
+  replace_texts со ВСЕМИ парами из сообщения ОДНИМ вызовом. НЕ вызывай перед
+  этим get_lander_context, list_files или read_file — они не нужны: find берётся
+  ДОСЛОВНО из сообщения пользователя (точная копия, ничего не перефразируй и не
+  сокращай). Инструмент сам найдёт файлы и вернёт по каждой паре число замен;
+  пары с replaced=0 перечисли пользователю как «не найдено на ленде».
+- Для остальных правок кода адаптированного ленда: list_files → read_file →
+  edit_file (точечная замена find→replace). Перед edit_file ВСЕГДА читай файл,
+  чтобы строка find точно совпадала. Правки идут в выходной архив, результат
+  сразу виден в превью. Пример запроса: «поменяй form_sale на grid».
   ВАЖНО: по умолчанию все правки разметки/текста/скриптов делай в файле
   `index.php` (это главная страница ленда). Другой файл трогай ТОЛЬКО если
   пользователь явно его назвал или нужная строка точно в другом файле.
@@ -57,6 +64,7 @@ SYSTEM_PROMPT = """\
 - После действий кратко сообщи результат и что проверить в превью.
 
 Формат ответа (СТРОГО):
+- ВСЕГДА отвечай ТОЛЬКО по-русски (даже если контент ленда на другом языке).
 - По-русски, предельно кратко. Экономь токены: никакой воды, вступлений
   («Конечно!», «Давайте…»), извинений, повторов вопроса пользователя.
 - Структурируй markdown: **жирным** — ключевое (статусы, итоги, имена файлов),
@@ -132,6 +140,35 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "replace_texts",
+            "description": "Массовая замена текстов на ленде: список пар "
+                           "{find, replace}. Ищет по ВСЕМ файлам сам — не требует "
+                           "read_file/list_files. find — ДОСЛОВНАЯ строка из запроса "
+                           "пользователя. Возвращает по каждой паре: сколько "
+                           "вхождений заменено и в каких файлах (0 = не найдено).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "pairs": {
+                        "type": "array",
+                        "description": "Все пары замен из сообщения пользователя",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "find": {"type": "string", "description": "Точный исходный текст"},
+                                "replace": {"type": "string", "description": "Новый текст"},
+                            },
+                            "required": ["find", "replace"],
+                        },
+                    },
+                },
+                "required": ["pairs"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "edit_image",
             "description": "Нейро-правка картинки адаптированного ленда (GPT Image 2): "
                            "по промпту меняет картинку (напр. «переведи текст на "
@@ -193,6 +230,60 @@ TOOLS = [
         },
     },
 ]
+
+
+_REPLACE_HEAD_RE = re.compile(r"^\s*(поменяй|замени|измени)\b[:\s]*", re.IGNORECASE)
+
+
+def parse_replace_pairs(message: str) -> Optional[list[tuple[str, str]]]:
+    """Детерминированный разбор сообщения «поменяй:\nX\nна\nY\n\nX2\nна\nY2…».
+
+    Такие запросы выполняются БЕЗ нейросети: слабая локальная модель, чтобы
+    вызвать инструмент, должна повторить весь текст в аргументах — на больших
+    сообщениях это медленно и ненадёжно (обрезка токенами). Возвращает пары,
+    если ВСЁ сообщение — это список замен (каждый блок содержит строку «на»),
+    иначе None (обычный путь через LLM).
+    """
+    m = _REPLACE_HEAD_RE.match(message or "")
+    if not m:
+        return None
+    body = message[m.end():].strip()
+    if not body:
+        return None
+    pairs: list[tuple[str, str]] = []
+    for block in re.split(r"\n\s*\n", body):
+        block = block.strip()
+        if not block:
+            continue
+        lines = block.split("\n")
+        # разделитель — строка, состоящая ровно из «на» (или "->"/"→")
+        seps = [i for i, ln in enumerate(lines)
+                if ln.strip().lower() in ("на", "->", "→")]
+        if len(seps) != 1 or seps[0] == 0 or seps[0] == len(lines) - 1:
+            return None  # блок не по формату — пусть разбирается модель
+        find = "\n".join(lines[:seps[0]]).strip()
+        repl = "\n".join(lines[seps[0] + 1:]).strip()
+        if not find:
+            return None
+        pairs.append((find, repl))
+    return pairs or None
+
+
+def format_replace_report(report: list[dict]) -> str:
+    """Человекочитаемый итог replace_texts для ответа в чате."""
+    ok = [r for r in report if r.get("replaced")]
+    miss = [r for r in report if not r.get("replaced")]
+    lines = [f"**Заменено {len(ok)} из {len(report)} пар** (без нейросети, точным поиском)."]
+    if ok:
+        files = sorted({f for r in ok for f in r.get("files", [])})
+        lines.append(f"- вхождений: {sum(r['replaced'] for r in ok)}, файлы: "
+                     + ", ".join(f"`{f}`" for f in files))
+    if miss:
+        lines.append("**Не найдено на ленде** (текст отличается — проверь пробелы/теги):")
+        for r in miss:
+            lines.append(f"- `{r['find']}…`")
+    lines.append("Проверь результат в превью.")
+    return "\n".join(lines)
 
 
 def _now() -> float:
@@ -370,6 +461,20 @@ class LanderAgent:
                        for d in diff[:8]],
         }
 
+    def _tool_replace_texts(self, sid: str, lid: str, args: dict) -> dict:
+        pairs_raw = args.get("pairs") or []
+        pairs = [((p.get("find") or ""), (p.get("replace") or ""))
+                 for p in pairs_raw if isinstance(p, dict)]
+        if not pairs:
+            return {"error": "пустой список pairs"}
+        try:
+            report = self.mgr.replace_texts(sid, lid, pairs)
+        except ValueError as e:
+            return {"error": str(e)}
+        ok = sum(1 for r in report if r.get("replaced"))
+        return {"pairs_total": len(report), "pairs_replaced": ok,
+                "pairs_not_found": len(report) - ok, "report": report}
+
     def _tool_edit_image(self, sid: str, lid: str, args: dict) -> dict:
         from services.image_edit import edit_lander_media
         try:
@@ -392,6 +497,8 @@ class LanderAgent:
             return self._tool_read_file(sid, lid, args)
         if name == "edit_file":
             return self._tool_edit_file(sid, lid, args)
+        if name == "replace_texts":
+            return self._tool_replace_texts(sid, lid, args)
         if name == "translate_lander":
             return self._tool_translate(sid, lid, args)
         if name == "adapt_lander":
@@ -415,11 +522,27 @@ class LanderAgent:
         history = list(ls.chat or [])
         new_messages: list[dict] = [{"role": "user", "content": user_message, "ts": _now()}]
 
+        # «поменяй: X на Y (×N)» — детерминированный путь БЕЗ нейросети.
+        pairs = parse_replace_pairs(user_message)
+        if pairs:
+            try:
+                report = self.mgr.replace_texts(sid, lid, pairs)
+                content = format_replace_report(report)
+            except ValueError as e:
+                content = f"Не получилось выполнить замены: {e}"
+            new_messages.append({"role": "assistant", "content": content, "ts": _now()})
+            ls.chat = history + new_messages
+            self.mgr._save(s)
+            return new_messages
+
         # Контекст: system + прошлая история + новое сообщение.
         convo = [{"role": "system", "content": SYSTEM_PROMPT}] + history + new_messages
 
         for _ in range(MAX_STEPS):
-            resp = self.client.chat(_sanitize_for_api(convo), tools=TOOLS, model=model)
+            # 8192: аргументы tool-вызова могут быть большими (replace_texts с
+            # десятком длинных пар повторяет весь текст) — 4096 обрезал вызов.
+            resp = self.client.chat(_sanitize_for_api(convo), tools=TOOLS,
+                                    model=model, max_tokens=8192)
             msg = resp["message"]
             usage = resp.get("usage") or {}
             assistant_msg = {
@@ -444,9 +567,16 @@ class LanderAgent:
                 try:
                     args = json.loads(fn.get("arguments") or "{}")
                 except ValueError:
-                    args = {}
+                    # Аргументы обрезаны лимитом токенов / битый JSON — скажем
+                    # модели явно, чтобы она повторила вызов меньшими частями.
+                    args = None
                 log.info("agent tool %s args=%s", name, args)
-                result = self._execute(sid, lid, name, args)
+                if args is None:
+                    result = {"error": "аргументы вызова обрезаны или невалидный "
+                                       "JSON — повтори вызов; если данных много, "
+                                       "разбей на несколько вызовов"}
+                else:
+                    result = self._execute(sid, lid, name, args)
                 tool_msg = {
                     "role": "tool",
                     "tool_call_id": tc.get("id"),
@@ -488,13 +618,38 @@ class LanderAgent:
 
         history = list(ls.chat or [])
         new_messages: list[dict] = [{"role": "user", "content": user_message, "ts": _now()}]
+
+        # «поменяй: X на Y (×N)» — детерминированный путь БЕЗ нейросети
+        # (мгновенно и точно; слабой локальной модели такой объём не по зубам).
+        pairs = parse_replace_pairs(user_message)
+        if pairs:
+            yield {"type": "tool_call", "name": "replace_texts"}
+            try:
+                report = self.mgr.replace_texts(sid, lid, pairs)
+                yield {"type": "tool_result", "name": "replace_texts",
+                       "content": json.dumps(
+                           {"pairs_total": len(report),
+                            "pairs_replaced": sum(1 for r in report if r.get("replaced"))},
+                           ensure_ascii=False)}
+                content = format_replace_report(report)
+            except ValueError as e:
+                content = f"Не получилось выполнить замены: {e}"
+            final = {"role": "assistant", "content": content, "ts": _now()}
+            new_messages.append(final)
+            yield {"type": "assistant_message", "message": final}
+            ls.chat = history + new_messages
+            self.mgr._save(s)
+            yield {"type": "done", "lander": asdict(s.landers[lid])}
+            return
+
         convo = [{"role": "system", "content": SYSTEM_PROMPT}] + history + new_messages
 
         try:
             for _ in range(MAX_STEPS):
                 acc_content = ""
                 acc_tools: dict[int, dict] = {}
-                for chunk in self.client.chat_stream(_sanitize_for_api(convo), tools=TOOLS, model=model):
+                for chunk in self.client.chat_stream(_sanitize_for_api(convo), tools=TOOLS,
+                                                     model=model, max_tokens=8192):
                     choices = chunk.get("choices") or []
                     if not choices:
                         continue
@@ -536,9 +691,14 @@ class LanderAgent:
                     try:
                         args = json.loads(tc["function"]["arguments"] or "{}")
                     except ValueError:
-                        args = {}
+                        args = None
                     log.info("agent(stream) tool %s args=%s", name, args)
-                    result = self._execute(sid, lid, name, args)
+                    if args is None:
+                        result = {"error": "аргументы вызова обрезаны или "
+                                           "невалидный JSON — повтори вызов; если "
+                                           "данных много, разбей на несколько вызовов"}
+                    else:
+                        result = self._execute(sid, lid, name, args)
                     content = json.dumps(result, ensure_ascii=False)
                     tool_msg = {"role": "tool", "tool_call_id": tc["id"],
                                 "name": name, "content": content, "ts": _now()}

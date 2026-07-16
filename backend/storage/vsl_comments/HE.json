@@ -1,0 +1,434 @@
+{
+ "vertical": "HEARING",
+ "sets": [
+  {
+   "offer_id": 20106,
+   "offer_name": "20106 Neuroson [HEARING-CO] [vsl es -] ReactJS v5",
+   "geo": "CO",
+   "lang": "es",
+   "comments": [
+    {
+     "index": 0,
+     "name": "María Luisa Huertas Ramos",
+     "text": "Tengo 68 años y nunca imaginé que algo tan sencillo pudiera restaurar mi audición. ¡Es justo lo que necesitaba después de años de lucha!",
+     "likes": 81,
+     "avatar": "avatars/reed.jpg",
+     "appearAtPercent": 5,
+     "replies": []
+    },
+    {
+     "index": 1,
+     "name": "José Ramírez Huamán",
+     "text": "El video podría haber sido un poco más largo, pero los resultados hablan por sí solos. Tengo 72 años y, después de solo unos días, mi audición está mejorando claramente. ¡Estoy muy agradecido de sentirme conectado de nuevo por fin!",
+     "likes": 81,
+     "avatar": "avatars/hayes.jpg",
+     "appearAtPercent": 12,
+     "replies": []
+    },
+    {
+     "index": 2,
+     "name": "Luis Alberto Quispe Flores",
+     "text": "Todas las personas mayores de 60 años que padecen tinnitus, mareos o pérdida auditiva deben ver esto. Ha cambiado por completo mi forma de ver mi afección. ¡Ojalá lo hubiera descubierto antes!",
+     "likes": 86,
+     "avatar": "avatars/gray.jpg",
+     "appearAtPercent": 19,
+     "replies": []
+    },
+    {
+     "index": 3,
+     "name": "Rosa Elena Gutiérrez Poma",
+     "text": "Una historia realmente inspiradora. Este médico es una bendición para todos los mayores que hemos sufrido en silencio problemas de audición durante años.",
+     "likes": 81,
+     "avatar": "avatars/coleman.jpg",
+     "appearAtPercent": 26,
+     "replies": []
+    },
+    {
+     "index": 4,
+     "name": "Ricardo Paredes Salazar",
+     "text": "¡Por fin alguien con el valor suficiente para revelar la verdad! Que Dios lo bendiga por ayudar a los peruanos mayores a recuperar nuestra audición y calidad de vida.",
+     "likes": 81,
+     "avatar": "avatars/harper.jpg",
+     "appearAtPercent": 33,
+     "replies": []
+    },
+    {
+     "index": 5,
+     "name": "Manuel Vargas Ccallo",
+     "text": "Pensaba que lo había probado todo en mis más de 70 años, pero este método tiene mucho sentido. Por primera vez en mucho tiempo, me siento realmente optimista con respecto a mi audición.",
+     "likes": 81,
+     "avatar": "avatars/baker.jpg",
+     "appearAtPercent": 40,
+     "replies": []
+    },
+    {
+     "index": 6,
+     "name": "Julia Flores Ccanto",
+     "text": "Tengo 65 años y al principio era escéptico... pero, sinceramente, estoy asombrado. En una semana, el ruido y el zumbido empezaron a desaparecer. ¡Es como volver a oír el mundo con claridad!",
+     "likes": 81,
+     "avatar": "avatars/howard.jpg",
+     "appearAtPercent": 47,
+     "replies": []
+    },
+    {
+     "index": 7,
+     "name": "Elena Vargas Hurtado",
+     "text": "Esto me ha cambiado la vida, literalmente. Mi esposo y yo tenemos más de 60 años y, tras años de pérdida auditiva y frustración, por fin tenemos esperanza. ¡Vamos a empezar esto juntos!",
+     "likes": 81,
+     "avatar": "avatars/turner.jpg",
+     "appearAtPercent": 54,
+     "replies": []
+    },
+    {
+     "index": 8,
+     "name": "Luz Marina Salinas Yupanqui",
+     "text": "Tengo 74 años y puedo confirmar que esto realmente funciona. Tenía graves problemas de audición, pero ahora mi situación ha cambiado por completo. Mi familia no podría estar más feliz.",
+     "likes": 81,
+     "avatar": "avatars/rowell.jpg",
+     "appearAtPercent": 61,
+     "replies": []
+    },
+    {
+     "index": 9,
+     "name": "Ana Mercedes Córdova Chuqui",
+     "text": "A mis 70 años, era escéptico y estaba desesperado, pero este método realmente funcionó. Mi audición mejoró y mi energía aumentó drásticamente. ¡Estoy encantado!",
+     "likes": 81,
+     "avatar": "avatars/watson.jpg",
+     "appearAtPercent": 68,
+     "replies": []
+    },
+    {
+     "index": 10,
+     "name": "Jorge Castillo Poma",
+     "text": "¿Funciona realmente para todo el mundo? Tengo 70 años y estoy desesperado por encontrar respuestas reales. Probaré cualquier cosa que me ayude a volver a oír con claridad.",
+     "likes": 81,
+     "avatar": "avatars/parker.jpg",
+     "appearAtPercent": 75,
+     "replies": []
+    },
+    {
+     "index": 11,
+     "name": "Víctor Salinas Oré",
+     "text": "¡No puedo creer que la solución estuviera aquí todo el tiempo! Tengo 71 años y por fin siento esperanza y vuelvo a tener el control de mi audición.",
+     "likes": 81,
+     "avatar": "avatars/sanders.jpg",
+     "appearAtPercent": 82,
+     "replies": []
+    },
+    {
+     "index": 12,
+     "name": "Oscar Llanos Córdova",
+     "text": "La edición del video podría ser más sencilla para personas de mi edad, pero, sinceramente, el mensaje es poderoso. Tengo 69 años y estoy completamente convencido: esto es real.",
+     "likes": 81,
+     "avatar": "avatars/coopper.jpg",
+     "appearAtPercent": 89,
+     "replies": []
+    },
+    {
+     "index": 13,
+     "name": "Hernán Rojas Quinteros",
+     "text": "A mis 72 años, a mitad de este video, mi perspectiva sobre la pérdida auditiva cambió por completo. Todas las personas mayores de 60 años deberían verlo, ¡realmente te cambia la vida!",
+     "likes": 81,
+     "avatar": "avatars/rogers.jpg",
+     "appearAtPercent": 93,
+     "replies": []
+    },
+    {
+     "index": 14,
+     "name": "Alejandro Guerra Yupanqui",
+     "text": "Tengo 67 años y entiendo el escepticismo, pero créanme: este método es exactamente lo que necesitamos. ¡Véanlo, pruébenlo y compruébenlo ustedes mismos!",
+     "likes": 81,
+     "avatar": "avatars/simmons.jpg",
+     "appearAtPercent": 97,
+     "replies": []
+    }
+   ]
+  },
+  {
+   "offer_id": 19961,
+   "offer_name": "19961 Avital [HEARING-CO] [vsl es ] ReactJS",
+   "geo": "CO",
+   "lang": "es",
+   "comments": [
+    {
+     "index": 0,
+     "name": "Salvador Pérez Carmona",
+     "text": "Tengo 67 años y entiendo el escepticismo, pero créanme: este método es exactamente lo que necesitamos para recuperar el oído. ¡Véanlo, pruébenlo y compruébenlo ustedes mismos!",
+     "likes": 81,
+     "avatar": "images/simmons-1.jpg",
+     "appearAtPercent": 5,
+     "replies": []
+    },
+    {
+     "index": 1,
+     "name": "Antonio Navarro Cruz",
+     "text": "A mis 72 años, a mitad de este video, mi perspectiva sobre la sordera cambió por completo. Todas las personas mayores de 60 años deberían verlo, ¡realmente te salva de quedarte aislado del mundo!",
+     "likes": 81,
+     "avatar": "images/rogers-1.jpg",
+     "appearAtPercent": 12,
+     "replies": []
+    },
+    {
+     "index": 2,
+     "name": "Francisco Gutiérrez Salas",
+     "text": "La edición del video podría ser más sencilla para personas de mi edad, pero, sinceramente, el mensaje es poderoso. Tengo 69 años y estoy completamente convencido: volver a oír con claridad es posible.",
+     "likes": 81,
+     "avatar": "images/coopper-1.jpg",
+     "appearAtPercent": 19,
+     "replies": []
+    },
+    {
+     "index": 3,
+     "name": "Héctor Morales Rojas",
+     "text": "¡No puedo creer que la solución estuviera aquí todo el tiempo! Tengo 71 años, ya no necesito subir el volumen del televisor y por fin vuelvo a tener el control de mi vida cotidiana.",
+     "likes": 81,
+     "avatar": "images/sanders-1.jpg",
+     "appearAtPercent": 26,
+     "replies": []
+    },
+    {
+     "index": 4,
+     "name": "Manuel Domínguez Torres",
+     "text": "¿Funciona realmente para todo el mundo? Tengo 70 años y estoy desesperado por encontrar respuestas reales. Probaré cualquier cosa que me ayude a oír con claridad sin ese maldito zumbido constante.",
+     "likes": 81,
+     "avatar": "images/parker-1.jpg",
+     "appearAtPercent": 33,
+     "replies": []
+    },
+    {
+     "index": 5,
+     "name": "Rosa Márquez Luna",
+     "text": "A mis 70 años, era escéptica y estaba desesperada, pero este método realmente funcionó. Mi audición mejoró y mi energía aumentó drásticamente. ¡Ya no necesito que me repitan todo en cada conversación!",
+     "likes": 81,
+     "avatar": "images/watson-1.jpg",
+     "appearAtPercent": 40,
+     "replies": []
+    },
+    {
+     "index": 6,
+     "name": "Isabel Flores Montoya",
+     "text": "Tengo 74 años y puedo confirmar que esto realmente funciona. Tenía graves problemas para oír conversaciones en ambientes ruidosos, pero ahora mi situación ha cambiado por completo. Mi familia no podría estar más feliz.",
+     "likes": 81,
+     "avatar": "images/rowell-1.jpg",
+     "appearAtPercent": 47,
+     "replies": []
+    },
+    {
+     "index": 7,
+     "name": "Josefina Rivera Castañeda",
+     "text": "Esto me ha cambiado la vida, literalmente. Mi esposo y yo tenemos más de 60 años y, tras años de perder la audición y frustración, por fin tenemos esperanza. ¡Vamos a empezar esto juntos hoy mismo!",
+     "likes": 81,
+     "avatar": "images/turner-1.jpg",
+     "appearAtPercent": 50,
+     "replies": []
+    },
+    {
+     "index": 8,
+     "name": "Beatriz Delgado Ruiz",
+     "text": "Tengo 65 años y al principio era escéptica... pero, sinceramente, estoy asombrada. En una semana, el zumbido y la sensación de oídos tapados empezaron a desaparecer. ¡Es como volver a oír el mundo con nitidez!",
+     "likes": 81,
+     "avatar": "images/howard-1.jpg",
+     "appearAtPercent": 58,
+     "replies": []
+    },
+    {
+     "index": 9,
+     "name": "Rafael Vargas Medina",
+     "text": "Pensaba que lo había probado todo en mis más de 70 años (gotas, vitaminas, audífonos caros), pero este método tiene mucho sentido. Por primera vez en mucho tiempo, me siento realmente optimista con respecto a mi oído.",
+     "likes": 81,
+     "avatar": "images/baker-1.jpg",
+     "appearAtPercent": 64,
+     "replies": []
+    },
+    {
+     "index": 10,
+     "name": "Miguel Hernández López",
+     "text": "¡Por fin alguien con el valor suficiente para revelar la verdad! Que Dios lo bendiga por ayudar a los colombianos mayores a recuperar nuestra audición y calidad de vida. ¡Adiós a la mafia de los audífonos caros!",
+     "likes": 81,
+     "avatar": "images/harper-1.jpg",
+     "appearAtPercent": 70,
+     "replies": []
+    },
+    {
+     "index": 11,
+     "name": "Luisa Ortiz Zamora",
+     "text": "Una historia realmente inspiradora. Este médico es una bendición para todos los mayores que hemos sufrido en silencio problemas de audición durante años y dependíamos de esos audífonos inútiles.",
+     "likes": 81,
+     "avatar": "images/coleman-1.jpg",
+     "appearAtPercent": 76,
+     "replies": []
+    },
+    {
+     "index": 12,
+     "name": "José Ramírez Castillo",
+     "text": "Todas las personas mayores de 60 años que padecen pérdida auditiva, zumbido en los oídos o acúfenos deben ver esto. Ha cambiado por completo mi forma de entender mi afección. ¡Ojalá lo hubiera descubierto antes!",
+     "likes": 86,
+     "avatar": "images/gray-1.jpg",
+     "appearAtPercent": 82,
+     "replies": []
+    },
+    {
+     "index": 13,
+     "name": "Carmen Rodríguez Pacheco",
+     "text": "El video podría haber sido un poco más largo, pero los resultados hablan por sí solos. Tengo 72 años y, después de solo unos días, mi audición está mejorando claramente. ¡Estoy muy agradecida de volver a oír las voces de mis nietos por fin!",
+     "likes": 81,
+     "avatar": "images/hayes-1.jpg",
+     "appearAtPercent": 88,
+     "replies": []
+    },
+    {
+     "index": 14,
+     "name": "María González Herrera",
+     "text": "Tengo 68 años y nunca imaginé que algo tan sencillo pudiera restaurar mi audición. ¡Es justo lo que necesitaba después de años de lucha contra ese ruido constante en mis oídos!",
+     "likes": 81,
+     "avatar": "images/reed-1.jpg",
+     "appearAtPercent": 95,
+     "replies": []
+    }
+   ]
+  },
+  {
+   "offer_id": 18745,
+   "offer_name": "18745 Otovix [HEARING-CL] [vsl es -] ReactJs v4",
+   "geo": "CL",
+   "lang": "es",
+   "comments": [
+    {
+     "index": 0,
+     "name": "Laura Hernández",
+     "text": "¡Muy útil para mi problema de audición, lo voy a probar!",
+     "likes": 85,
+     "avatar": "avatars/11.jpeg",
+     "appearAtPercent": 5,
+     "replies": []
+    },
+    {
+     "index": 1,
+     "name": "Patricia Ramírez",
+     "text": "El video me pareció muy corto, esperaba más información sobre la pérdida de audición, pero me gustó y voy a empezar a hacer todo lo que enseña.",
+     "likes": 79,
+     "avatar": "avatars/12.jpeg",
+     "appearAtPercent": 12,
+     "replies": []
+    },
+    {
+     "index": 2,
+     "name": "Luis García",
+     "text": "Todos los que sufren problemas de audición deberían ver esto, lo que revela es increíble, ¡nunca pensé que esto fuera posible!",
+     "likes": 81,
+     "avatar": "avatars/3.jpeg",
+     "appearAtPercent": 19,
+     "replies": []
+    },
+    {
+     "index": 3,
+     "name": "Alejandro Torres",
+     "text": "¡Amén! ¡Que Dios bendiga por esta solución para los problemas de audición!",
+     "likes": 66,
+     "avatar": "avatars/4.jpeg",
+     "appearAtPercent": 26,
+     "replies": []
+    },
+    {
+     "index": 4,
+     "name": "Carmen López",
+     "text": "Que Dios bendiga a este hombre por ayudarnos con los problemas de audición.",
+     "likes": 50,
+     "avatar": "avatars/13.jpeg",
+     "appearAtPercent": 33,
+     "replies": []
+    },
+    {
+     "index": 5,
+     "name": "Rosa Martínez",
+     "text": "De verdad espero que funcione para la audición de mi esposo, ¡hemos probado tantas cosas! Pero esto tiene todo el sentido.",
+     "likes": 47,
+     "avatar": "avatars/14.jpeg",
+     "appearAtPercent": 40,
+     "replies": [
+      {
+       "index": 0,
+       "name": "Miguel Martínez",
+       "text": "¡Increíble @Rosa! Empezamos hoy... mi esposo lleva tres años con problemas de audición.",
+       "avatar": "avatars/7.jpeg",
+       "likes": 41,
+       "appearAtPercent": 47
+      }
+     ]
+    },
+    {
+     "index": 6,
+     "name": "Carlos Morales",
+     "text": "Nunca había escuchado sobre esto para la audición, me pareció raro pero tiene mucho sentido... ya empecé a probarlo, ¡y está funcionando desde los primeros días!",
+     "likes": 40,
+     "avatar": "avatars/2.jpeg",
+     "appearAtPercent": 50,
+     "replies": []
+    },
+    {
+     "index": 7,
+     "name": "Ana González",
+     "text": "¿De verdad funciona para los problemas de audición?",
+     "likes": 18,
+     "avatar": "avatars/9.jpeg",
+     "appearAtPercent": 58,
+     "replies": [
+      {
+       "index": 0,
+       "name": "Rosa Martínez",
+       "text": "Sí @Ana, de verdad funciona, somos la prueba viviente... Mi esposo casi perdió la audición por completo... gracias a este video encontramos la solución. Toda mi familia está emocionada. Comparto este video todos los días.",
+       "avatar": "avatars/15.jpeg",
+       "likes": 22,
+       "appearAtPercent": 62
+      }
+     ]
+    },
+    {
+     "index": 8,
+     "name": "Juan Flores",
+     "text": "La solución para la audición siempre estuvo ahí... pero nadie la vio, ¡muchas gracias, trajiste luz y esperanza!",
+     "likes": 17,
+     "avatar": "avatars/5.jpeg",
+     "appearAtPercent": 68,
+     "replies": []
+    },
+    {
+     "index": 9,
+     "name": "Ana González",
+     "text": "No me gustó la edición del video... ¡pero lo entiendo perfectamente! Creo en todo lo que dice sobre los problemas de audición.",
+     "likes": 15,
+     "avatar": "avatars/10.jpeg",
+     "appearAtPercent": 75,
+     "replies": []
+    },
+    {
+     "index": 10,
+     "name": "María Sánchez",
+     "text": "Voy a enviar este video a otras personas, conozco gente con problemas crónicos de audición a quienes este video puede ayudarles a mejorar su calidad de vida.",
+     "likes": 11,
+     "avatar": "avatars/9.jpeg",
+     "appearAtPercent": 82,
+     "replies": []
+    },
+    {
+     "index": 11,
+     "name": "Julio Mendoza",
+     "text": "Apenas empecé a ver este video y ya me dio una nueva forma de pensar sobre los problemas de audición.",
+     "likes": 9,
+     "avatar": "avatars/8.jpeg",
+     "appearAtPercent": 89,
+     "replies": []
+    },
+    {
+     "index": 12,
+     "name": "Mario Reyes",
+     "text": "Esto es un poco controversial, pero creo que vale la pena verlo para formarse una opinión sobre los problemas de audición...",
+     "likes": 8,
+     "avatar": "avatars/1.jpeg",
+     "appearAtPercent": 95,
+     "replies": []
+    }
+   ]
+  }
+ ]
+}

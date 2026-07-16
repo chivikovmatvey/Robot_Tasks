@@ -95,7 +95,15 @@ export function SessionsPage() {
                 style={{ flex: 1, minWidth: 0, cursor: 'pointer' }}
                 onClick={() => nav(`/sessions/${s.id}`)}
               >
-                <div style={{ fontSize: 14, fontWeight: 500 }}>{s.offer || s.task_title}</div>
+                <div style={{ fontSize: 14, fontWeight: 500, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  {s.offer || s.task_title}
+                  {s.is_vsl && (
+                    <span style={{
+                      fontSize: 10, fontWeight: 700, padding: '1px 7px', borderRadius: 999,
+                      border: '1px solid var(--accent, #7c6fff)', color: 'var(--accent, #7c6fff)',
+                    }}>VSL</span>
+                  )}
+                </div>
                 <div className="dim small" style={{ marginTop: 2 }}>
                   {landers.length} ленд(ов): {landers.map(l => `${l.lander_id} (${l.status})`).join(', ')} · {fmtTime(s.created_at)}
                 </div>

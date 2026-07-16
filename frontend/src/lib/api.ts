@@ -236,6 +236,7 @@ export interface AiStatus {
   model: string | null;
   balance: number | null;
   models?: { id: string; label: string }[];
+  local?: { base_url: string; model: string } | null;
 }
 
 // Результат перевода ленда.
@@ -313,6 +314,7 @@ export async function translateStream(
   lid: string,
   targetLang: string | undefined,
   onEvent: (ev: TranslateEvent) => void,
+  signal?: AbortSignal,
 ): Promise<void> {
   const res = await fetch(
     `/api/sessions/${encodeURIComponent(sid)}/landers/${encodeURIComponent(lid)}/translate/stream`,
@@ -320,8 +322,36 @@ export async function translateStream(
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ target_lang: targetLang }),
+      signal,
     },
   );
+  if (!res.ok || !res.body) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`${res.status}: ${text}`);
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    const parts = buf.split('\n\n');
+    buf = parts.pop() || '';
+    for (const part of parts) {
+      const line = part.split('\n').find((l) => l.startsWith('data:'));
+      if (!line) continue;
+      try { onEvent(JSON.parse(line.slice(5).trim())); } catch { /* пропуск */ }
+    }
+  }
+}
+
+/** Сбор VSL-комментариев из Keitaro (SSE: step/vertical_done/done/error). */
+export async function vslCommentsHarvestStream(
+  onEvent: (ev: { type: string; message?: string; error?: string;
+                  code?: string; library?: any[] }) => void,
+): Promise<void> {
+  const res = await fetch('/api/vsl/comments/harvest', { method: 'POST' });
   if (!res.ok || !res.body) {
     const text = await res.text().catch(() => '');
     throw new Error(`${res.status}: ${text}`);
@@ -395,7 +425,7 @@ export interface KeitaroUploadEvent {
 export async function keitaroUploadStream(
   sid: string,
   lid: string,
-  opts: { type?: string; network?: string },
+  opts: { type?: string; network?: string; adult?: boolean },
   onEvent: (ev: KeitaroUploadEvent) => void,
 ): Promise<void> {
   const res = await fetch(
@@ -403,7 +433,7 @@ export async function keitaroUploadStream(
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type: opts.type || null, network: opts.network || null }),
+      body: JSON.stringify({ type: opts.type || null, network: opts.network || null, adult: !!opts.adult }),
     },
   );
   if (!res.ok || !res.body) {
@@ -431,6 +461,7 @@ export async function keitaroUploadStream(
 export interface LanderState {
   lander_id: string;
   status: string;
+  display_name?: string | null;
   task_uid?: string | null;
   task_title?: string | null;
   zip_path?: string | null;
@@ -462,6 +493,7 @@ export interface SessionSummary {
   task_title: string;
   offer: string;
   status: string;
+  is_vsl?: boolean;
   created_at: number;
   archived_at?: number | null;
   expires_at?: number | null;
@@ -482,6 +514,24 @@ export interface SessionFull {
   created_at: number;
   archived_at?: number | null;
   expires_at?: number | null;
+  is_vsl?: boolean;
+}
+
+// ── VSL ────────────────────────────────────────────────
+export interface VslConfigResponse {
+  config: Record<string, any>;
+  member: string;         // путь config.php внутри архива
+  product_image: string;  // текущее значение orderForm.productImage
+}
+
+export interface VslVideoStatus {
+  state: 'idle' | 'running' | 'done' | 'error';
+  steps: string[];
+  error?: string | null;
+  archive_name: string;
+  archive_ready: boolean;
+  archive_size?: number | null;
+  suggested_name?: string;
 }
 
 export interface SuggestParams {
@@ -673,9 +723,9 @@ export const api = {
   archiveSession:   (sid: string) => request<SessionFull>(`/api/sessions/${encodeURIComponent(sid)}/archive`, { method: 'POST' }),
   unarchiveSession: (sid: string) => request<SessionFull>(`/api/sessions/${encodeURIComponent(sid)}/unarchive`, { method: 'POST' }),
   // URL файла (фото/гиф/видео) из исходного архива ленда — для превью.
-  landerFileUrl: (sid: string, lid: string, path: string) =>
-    `/api/sessions/${encodeURIComponent(sid)}/landers/${encodeURIComponent(lid)}/file?path=${encodeURIComponent(path)}`,
-  createSession: (body: { task_uid?: string; task_uids?: string[]; lander_ids?: string[]; offer?: string }) =>
+  landerFileUrl: (sid: string, lid: string, path: string, output = false) =>
+    `/api/sessions/${encodeURIComponent(sid)}/landers/${encodeURIComponent(lid)}/file?path=${encodeURIComponent(path)}${output ? '&output=1' : ''}`,
+  createSession: (body: { task_uid?: string; task_uids?: string[]; lander_ids?: string[]; offer?: string; vsl?: boolean }) =>
     request<SessionFull>('/api/sessions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -703,6 +753,11 @@ export const api = {
     request<SessionFull>(`/api/sessions/${encodeURIComponent(sid)}/landers/${encodeURIComponent(lid)}`, {
       method: 'DELETE',
     }),
+  // Привязать ленд к задаче сессии (объединённые сессии: загруженный ленд без привязки).
+  setLanderTask: (sid: string, lid: string, task_uid: string) =>
+    request<{ task_uid: string; task_title: string }>(
+      `/api/sessions/${encodeURIComponent(sid)}/landers/${encodeURIComponent(lid)}/task`,
+      { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ task_uid }) }),
   addTaskVariant: (sid: string, lid: string) =>
     request<{ task_uid: string; offer_id: number; task_title: string }>(
       `/api/sessions/${encodeURIComponent(sid)}/landers/${encodeURIComponent(lid)}/task-variant`,
@@ -723,6 +778,16 @@ export const api = {
     request<SessionFull>(`/api/sessions/${encodeURIComponent(sid)}/landers/${encodeURIComponent(lid)}/reinstall`, {
       method: 'POST',
     }),
+  renameLander: (sid: string, lid: string, name: string) =>
+    request<SessionFull>(`/api/sessions/${encodeURIComponent(sid)}/landers/${encodeURIComponent(lid)}/name`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    }),
+  duplicateLander: (sid: string, lid: string) =>
+    request<{ lander_id: string; session: SessionFull }>(
+      `/api/sessions/${encodeURIComponent(sid)}/landers/${encodeURIComponent(lid)}/duplicate`,
+      { method: 'POST' }),
   uploadLander: async (sid: string, file: File, landerId = '') => {
     const fd = new FormData();
     fd.append('file', file);
@@ -828,20 +893,82 @@ export const api = {
     request<{ ok: boolean }>(`/api/published/${id}`, { method: 'DELETE' }),
 
   // ── Заливка в Keitaro ────────────────────────────────
-  keitaroPlan: (sid: string, lid: string, type?: string) =>
-    request<KeitaroPlan>(`/api/sessions/${encodeURIComponent(sid)}/landers/${encodeURIComponent(lid)}/keitaro-plan${type ? `?type=${type}` : ''}`),
-  keitaroUpload: (sid: string, lid: string, type?: string) =>
+  keitaroPlan: (sid: string, lid: string, type?: string, adult?: boolean) =>
+    request<KeitaroPlan>(`/api/sessions/${encodeURIComponent(sid)}/landers/${encodeURIComponent(lid)}/keitaro-plan?adult=${adult ? 1 : 0}${type ? `&type=${type}` : ''}`),
+  keitaroUpload: (sid: string, lid: string, type?: string, adult?: boolean) =>
     request<KeitaroPlan>(`/api/sessions/${encodeURIComponent(sid)}/landers/${encodeURIComponent(lid)}/keitaro-upload`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type }),
+      body: JSON.stringify({ type, adult: !!adult }),
     }),
-  keitaroRename: (sid: string, lid: string, offer_id: number, type?: string) =>
+  keitaroRename: (sid: string, lid: string, offer_id: number, type?: string, adult?: boolean) =>
     request<KeitaroRenameResult>(`/api/sessions/${encodeURIComponent(sid)}/landers/${encodeURIComponent(lid)}/keitaro-rename`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ offer_id, type: type || null }),
+      body: JSON.stringify({ offer_id, type: type || null, adult: !!adult }),
     }),
+
+  // ── VSL: конфиг, фото продукта, видео ────────────────
+  vslConfig: (sid: string, lid: string) =>
+    request<VslConfigResponse>(`/api/sessions/${encodeURIComponent(sid)}/landers/${encodeURIComponent(lid)}/vsl-config`),
+  vslConfigSave: (sid: string, lid: string, config: Record<string, any>) =>
+    request<{ member: string }>(`/api/sessions/${encodeURIComponent(sid)}/landers/${encodeURIComponent(lid)}/vsl-config`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ config }),
+    }),
+  // Библиотека VSL-комментариев по вертикалям.
+  vslCommentsLibrary: () =>
+    request<{ library: { code: string; vertical: string; sets: number; comments: number; langs: string[] }[];
+              verticals: { code: string; name: string }[] }>(
+      '/api/vsl/comments/library'),
+  vslCommentsApply: (sid: string, lid: string, vertical: string) =>
+    request<{ applied: number; sets: number; vertical: string; avatars: number; skipped: number }>(
+      `/api/sessions/${encodeURIComponent(sid)}/landers/${encodeURIComponent(lid)}/vsl/comments/apply`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ vertical }),
+      }),
+  vslCommentsTranslate: (sid: string, lid: string, targetLang?: string) =>
+    request<{ lang: string; blocks: number; changed: number; comments: number }>(
+      `/api/sessions/${encodeURIComponent(sid)}/landers/${encodeURIComponent(lid)}/vsl/comments/translate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target_lang: targetLang || null }),
+        timeoutMs: 300000, // перевод пачки комментариев через deepseek небыстрый
+      }),
+  vslProductImage: (sid: string, lid: string, file: File) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    return postFormData<{ name: string; size: number }>(
+      `/api/sessions/${encodeURIComponent(sid)}/landers/${encodeURIComponent(lid)}/vsl-product-image`, fd);
+  },
+  vslVideoStart: (sid: string, lid: string, opts: { file?: File; m3u8Url?: string }) => {
+    const fd = new FormData();
+    if (opts.file) fd.append('file', opts.file);
+    fd.append('m3u8_url', opts.m3u8Url || '');
+    return postFormData<{ state: string }>(
+      `/api/sessions/${encodeURIComponent(sid)}/landers/${encodeURIComponent(lid)}/vsl-video`, fd);
+  },
+  vslVideoStatus: (sid: string, lid: string) =>
+    request<VslVideoStatus>(`/api/sessions/${encodeURIComponent(sid)}/landers/${encodeURIComponent(lid)}/vsl-video`, { timeoutMs: 15000 }),
+  vslVideoRename: (sid: string, lid: string, name: string) =>
+    request<{ archive_name: string; src: string; poster: string }>(
+      `/api/sessions/${encodeURIComponent(sid)}/landers/${encodeURIComponent(lid)}/vsl-video/name`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      }),
+  vslVideoDownloadUrl: (sid: string, lid: string) =>
+    `/api/sessions/${encodeURIComponent(sid)}/landers/${encodeURIComponent(lid)}/vsl-video/download`,
+  // Архив VSL-ленда с текущим конфигом/адаптацией (создаст рабочую копию при нужде).
+  vslDownloadUrl: (sid: string, lid: string) =>
+    `/api/sessions/${encodeURIComponent(sid)}/landers/${encodeURIComponent(lid)}/vsl-download`,
+  // Фото продукта группы с AdRobot → product.png в конфиг VSL.
+  vslProductImageFromGroup: (sid: string, lid: string) =>
+    request<{ found: boolean; offer: string; name?: string }>(
+      `/api/sessions/${encodeURIComponent(sid)}/landers/${encodeURIComponent(lid)}/vsl-product-image/from-group`,
+      { method: 'POST' }),
 
   // ── Чат-агент (AITUNNEL / Kimi) ──────────────────────
   aiStatus: () => request<AiStatus>('/api/ai/status'),

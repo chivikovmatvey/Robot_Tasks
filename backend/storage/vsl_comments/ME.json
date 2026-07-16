@@ -1,0 +1,148 @@
+{
+ "vertical": "MENOPAUSE",
+ "sets": [
+  {
+   "offer_id": 15991,
+   "offer_name": "15991 Selesana [MENOPAUSE-PE] [vsl es -] ReactJS",
+   "geo": "PE",
+   "lang": "es",
+   "comments": [
+    {
+     "index": 0,
+     "name": "Laura Bianchi",
+     "text": "¡Finalmente entendí cómo aliviar los sofocos y recuperar mi bienestar, seguiré estos consejos!",
+     "likes": 85,
+     "avatar": "avatars/11.jpeg",
+     "appearAtPercent": 5,
+     "replies": []
+    },
+    {
+     "index": 1,
+     "name": "Patrizia Romano",
+     "text": "El video es corto pero muy útil. Explica bien cómo tratar los síntomas de la menopausia, lo pondré en práctica.",
+     "likes": 79,
+     "avatar": "avatars/12.jpeg",
+     "appearAtPercent": 12,
+     "replies": []
+    },
+    {
+     "index": 2,
+     "name": "Giulia Bianchi",
+     "text": "Todas las mujeres que sufren la menopausia deberían ver este video, ¡la información es increíble!",
+     "likes": 81,
+     "avatar": "avatars/3.jpeg",
+     "appearAtPercent": 19,
+     "replies": []
+    },
+    {
+     "index": 3,
+     "name": "Alessandra Romano",
+     "text": "¡Gracias por compartir estos consejos sobre cómo equilibrar las hormonas de forma natural!",
+     "likes": 66,
+     "avatar": "avatars/4.jpeg",
+     "appearAtPercent": 26,
+     "replies": []
+    },
+    {
+     "index": 4,
+     "name": "Carmen Rossi",
+     "text": "Bendiciones por mostrarnos cómo enfrentar la menopausia y recuperar la calidad de vida",
+     "likes": 50,
+     "avatar": "avatars/13.jpeg",
+     "appearAtPercent": 33,
+     "replies": []
+    },
+    {
+     "index": 5,
+     "name": "Rosa Ferrari",
+     "text": "Espero que estos consejos realmente me ayuden con mis síntomas de menopausia. Todo tiene mucho sentido.",
+     "likes": 47,
+     "avatar": "avatars/14.jpeg",
+     "appearAtPercent": 40,
+     "replies": [
+      {
+       "index": 0,
+       "name": "Chiara Ferrari",
+       "text": "¡Increíble @Rosa! Comenzaré hoy… quiero sentirme como antes, sin sofocos ni cansancio.",
+       "avatar": "avatars/7.jpeg",
+       "likes": 41,
+       "appearAtPercent": 47
+      }
+     ]
+    },
+    {
+     "index": 6,
+     "name": "Carla Rossi",
+     "text": "Nunca había oído hablar de este método para la menopausia, parecía raro, ¡pero funciona desde los primeros días!",
+     "likes": 40,
+     "avatar": "avatars/2.jpeg",
+     "appearAtPercent": 50,
+     "replies": []
+    },
+    {
+     "index": 8,
+     "name": "Anna Martini",
+     "text": "¿Realmente funciona para eliminar los sofocos y el insomnio de la menopausia?",
+     "likes": 18,
+     "avatar": "avatars/9.jpeg",
+     "appearAtPercent": 58,
+     "replies": [
+      {
+       "index": 0,
+       "name": "Rosa Ferrari",
+       "text": "Sí @Anna, realmente funciona. Estoy viendo resultados desde los primeros días. Me siento mucho mejor y sigo estos consejos todos los días.",
+       "avatar": "avatars/15.jpeg",
+       "likes": 22,
+       "appearAtPercent": 62
+      }
+     ]
+    },
+    {
+     "index": 9,
+     "name": "Giovanna Martini",
+     "text": "La solución para la menopausia siempre estuvo allí… no nos habíamos dado cuenta. ¡Muchas gracias por darnos esperanza!",
+     "likes": 17,
+     "avatar": "avatars/5.jpeg",
+     "appearAtPercent": 68,
+     "replies": []
+    },
+    {
+     "index": 10,
+     "name": "Anna Martini",
+     "text": "No me gustó mucho la edición del video, pero los consejos sobre los síntomas de la menopausia son muy útiles.",
+     "likes": 15,
+     "avatar": "avatars/10.jpeg",
+     "appearAtPercent": 75,
+     "replies": []
+    },
+    {
+     "index": 11,
+     "name": "Maria Bianchi",
+     "text": "Enviaré este video a amigas y familiares que sufren la menopausia, puede realmente ayudar.",
+     "likes": 11,
+     "avatar": "avatars/9.jpeg",
+     "appearAtPercent": 82,
+     "replies": []
+    },
+    {
+     "index": 12,
+     "name": "Giulia Mandera",
+     "text": "Al empezar a ver el video, ya entendí un nuevo enfoque para equilibrar mis hormonas y recuperar la energía.",
+     "likes": 9,
+     "avatar": "avatars/8.jpeg",
+     "appearAtPercent": 89,
+     "replies": []
+    },
+    {
+     "index": 13,
+     "name": "Maria Rossi",
+     "text": "Es un tema delicado, pero vale la pena verlo para aprender cómo enfrentar la menopausia de forma natural.",
+     "likes": 8,
+     "avatar": "avatars/1.jpeg",
+     "appearAtPercent": 95,
+     "replies": []
+    }
+   ]
+  }
+ ]
+}

@@ -377,6 +377,12 @@ def detect_prices(text: str) -> tuple[str | None, str | None, str | None]:
         nums = sorted(set(p[0] for p in prices_this_cur))
         p_new = min(nums)
         p_old = max(nums) if len(nums) > 1 else None
+        # Старая цена на лендах = ровно 2× новой (правило техотдела). Если
+        # среди кандидатов есть точное 2×новой — это старая цена, а max может
+        # быть мусором из текста («в аптеке за 250 zł» из фейк-комментария
+        # давал пару 59/250 вместо реальной 59/118).
+        if p_old is not None and p_new * 2 in nums and p_old != p_new * 2:
+            p_old = p_new * 2
 
     # Ищем точные строки в тексте для правил замены
     # Предпочитаем строку с cur_sym (чистый вариант, без $)
@@ -591,10 +597,8 @@ def build_config(found: dict, geo_id: str, geo: dict,
         rules.append({"label": "WIDGET_ЦЕНА_СТА",
                       "find": f'data-old-price="{w_old}"',
                       "replace": f'data-old-price="{widget_old_val}"'})
-    # data-widget-variant — всегда lead-generator
-    rules.append({"label": "WIDGET_VARIANT",
-                  "find": 'data-widget-variant=""',
-                  "replace": 'data-widget-variant="lead-generator"'})
+    # data-widget-variant НЕ трогаем: по регламенту пустая строка = рандомный
+    # вариант виджета, конкретный ставится только по просьбе баера.
 
     # ── 2b. Цены в верстке ──────────────────────────────────────────
     # Если переданы разделённые компоненты (число + валюта) —

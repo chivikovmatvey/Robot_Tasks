@@ -194,6 +194,7 @@ def run_clean_inject(zip_path: str, inject_params: dict) -> tuple[str | None, Ca
                 'price_new':    inject_params.get('price_new', ''),
                 'price_old':    inject_params.get('price_old', ''),
                 'prod_img':     inject_params.get('prod_img', 'product.webp'),
+                'product_name': inject_params.get('product_name', ''),
                 'custom_replacements': parse_custom_replacements(inject_params.get('custom_replacements', '')),
             })
             return out_path
@@ -391,6 +392,7 @@ def run_adapt(zip_path: str, params: dict,
                         'price_old':    params.get('price_old', '') or '',
                         'prod_img':     (next(iter((params.get('image_map') or {}).values()), '')
                                          or 'product.webp'),
+                        'product_name': params.get('product_new', '') or '',
                         'custom_replacements': parse_custom_replacements(
                             params.get('custom_replacements', '')),
                     }

@@ -63,6 +63,15 @@ async def lifespan(app: FastAPI):
         logging.getLogger("intake").exception("Не удалось создать TaskIntake")
         intake = None
 
+    # Пул потоков для sync-эндпоинтов: дефолтные 40 съедаются долгими
+    # Playwright-операциями (скачивание/заливка Keitaro) и ресурсами превью —
+    # остальные запросы (сохранение, адаптация) вставали в очередь.
+    try:
+        import anyio.to_thread
+        anyio.to_thread.current_default_thread_limiter().total_tokens = 120
+    except Exception:  # noqa: BLE001
+        pass
+
     if intake is not None:
         import os
         interval = int(os.getenv("POLL_INTERVAL", "60") or "60")
@@ -103,6 +112,36 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+# Диагностика зависаний: запросы дольше порога попадают в лог с длительностью —
+# видно, ЧТО именно тормозит (адаптация, превью, сохранение архива и т.д.).
+import logging as _logging
+import os as _os
+import sys as _sys
+import time as _time
+
+_SLOW_MS = int(_os.getenv("SLOW_REQUEST_MS", "3000") or "3000")
+_slow_log = _logging.getLogger("slow")
+_slow_log.setLevel(_logging.INFO)
+if not _slow_log.handlers:
+    _h = _logging.StreamHandler(_sys.stdout)
+    _h.setFormatter(_logging.Formatter(
+        "%(asctime)s %(levelname)s %(name)s: %(message)s", "%H:%M:%S"))
+    _slow_log.addHandler(_h)
+    _slow_log.propagate = False
+
+
+@app.middleware("http")
+async def _log_slow_requests(request, call_next):
+    t0 = _time.monotonic()
+    try:
+        return await call_next(request)
+    finally:
+        sec = _time.monotonic() - t0
+        if sec * 1000 >= _SLOW_MS:
+            _slow_log.warning("МЕДЛЕННО %.1fс %s %s", sec,
+                              request.method, request.url.path)
+
 
 # CORS — для разработки, чтобы Vite на :3000 мог стучаться сюда на :8000.
 # На проде Vite-прокси убирает эту необходимость, но в dev удобнее иметь.
@@ -342,6 +381,7 @@ class SessionCreateBody(BaseModel):
         None, description="Несколько задач на один оффер → объединённая сессия")
     lander_ids: list[str] | None = Field(None, description="ID лендов вручную")
     offer: str | None = Field(None, description="Целевой оффер (для ручного создания)")
+    vsl: bool = Field(False, description="VSL-сессия: добавить эталонный шаблон 19201, работа через config.php")
 
 
 @app.post("/api/sessions")
@@ -376,6 +416,13 @@ def session_create(request: Request, body: SessionCreateBody):
             except Exception as e:  # noqa: BLE001
                 raise HTTPException(502, f"Не удалось получить задачу {u}: {e}")
         s = mgr.create_from_tasks(details)
+        if body.vsl:
+            from services.session import LanderState
+            from services.vsl import VSL_TEMPLATE_ID
+            s.is_vsl = True
+            if VSL_TEMPLATE_ID not in s.landers:
+                s.landers[VSL_TEMPLATE_ID] = LanderState(lander_id=VSL_TEMPLATE_ID)
+            mgr._save(s)
         if s.landers:
             mgr.prepare_async(s.id)
         return s.to_dict()
@@ -408,8 +455,8 @@ def session_create(request: Request, body: SessionCreateBody):
         ids = body.lander_ids or []
 
     s = mgr.create_manual(ids, offer, task_uid=uid, task_title=title,
-                          fields=fields, task_url=url)
-    if ids:
+                          fields=fields, task_url=url, is_vsl=body.vsl)
+    if s.landers:  # VSL добавляет шаблон 19201 даже при пустых ids
         mgr.prepare_async(s.id)
     return s.to_dict()
 
@@ -505,6 +552,56 @@ def session_reinstall_lander(sid: str, lid: str):
     except ValueError as e:
         raise HTTPException(422, str(e))
     return s.to_dict()
+
+
+class LanderNameBody(BaseModel):
+    name: str = Field("", description="Новое имя вкладки ленда (пусто = id)")
+
+
+@app.put("/api/sessions/{sid}/landers/{lid}/name")
+def session_rename_lander(sid: str, lid: str, body: LanderNameBody):
+    """Переименовать вкладку ленда (пользовательское имя, id не меняется)."""
+    from services.session import get_manager
+    try:
+        get_manager().rename_lander(sid, lid, body.name)
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+    return get_manager().get(sid).to_dict()
+
+
+@app.post("/api/sessions/{sid}/landers/{lid}/duplicate")
+def session_duplicate_lander(sid: str, lid: str):
+    """Дублировать ленд (копия архивов/параметров/журнала правок)."""
+    from services.session import get_manager
+    try:
+        dup = get_manager().duplicate_lander(sid, lid)
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+    return {"lander_id": dup.lander_id, "session": get_manager().get(sid).to_dict()}
+
+
+class LanderTaskBody(BaseModel):
+    task_uid: str = Field(..., description="UID задачи-источника из сессии")
+
+
+@app.put("/api/sessions/{sid}/landers/{lid}/task")
+def session_set_lander_task(sid: str, lid: str, body: LanderTaskBody):
+    """Привязывает ленд к одной из задач сессии (для объединённых сессий:
+    загруженный вручную ленд без привязки нельзя было отправить в
+    вариант/ревью — «не могу определить задачу для действия»)."""
+    from services.session import get_manager
+    mgr = get_manager()
+    s = mgr.get(sid)
+    ls = s.landers.get(lid) if s else None
+    if ls is None:
+        raise HTTPException(404, f"Ленд {lid} не найден в сессии {sid}")
+    t = next((t for t in s.tasks if t.get("uid") == body.task_uid), None)
+    if t is None:
+        raise HTTPException(422, "Такой задачи нет в этой сессии")
+    ls.task_uid = t["uid"]
+    ls.task_title = t.get("title") or ""
+    mgr._save(s)
+    return {"task_uid": ls.task_uid, "task_title": ls.task_title}
 
 
 class AddTaskBody(BaseModel):
@@ -683,8 +780,11 @@ _LANDER_PREVIEW_MAX = 60 * 1024 * 1024
 
 
 @app.get("/api/sessions/{sid}/landers/{lid}/file")
-def session_lander_file(sid: str, lid: str, path: str):
-    """Отдаёт файл (фото/гиф/видео) из исходного архива ленда — для превью."""
+def session_lander_file(sid: str, lid: str, path: str, output: int = 0):
+    """Отдаёт файл (фото/гиф/видео) из архива ленда — для превью.
+
+    output=1 — из output-архива (рабочей копии), напр. product.png у VSL;
+    иначе — из исходного."""
     import zipfile
     from pathlib import Path as _Path
     from fastapi import Response
@@ -701,11 +801,20 @@ def session_lander_file(sid: str, lid: str, path: str):
     if s is None:
         raise HTTPException(404, "Сессия не найдена")
     ls = s.landers.get(lid)
-    if ls is None or not ls.zip_path or not _Path(ls.zip_path).exists():
-        raise HTTPException(404, "Архив ленда не найден")
+    if ls is None:
+        raise HTTPException(404, "Ленд не найден")
+    zip_src = None
+    if output and ls.output_name:
+        p = STORAGE / "outputs" / ls.output_name
+        if p.exists():
+            zip_src = str(p)
+    if zip_src is None:
+        if not ls.zip_path or not _Path(ls.zip_path).exists():
+            raise HTTPException(404, "Архив ленда не найден")
+        zip_src = ls.zip_path
 
     try:
-        with zipfile.ZipFile(ls.zip_path, "r") as zf:
+        with zipfile.ZipFile(zip_src, "r") as zf:
             names = zf.namelist()
             member = norm if norm in names else next(
                 (n for n in names if n.replace("\\", "/") == norm), None)
@@ -735,6 +844,41 @@ def session_lander_media(sid: str, lid: str, all: int = 0):
         raise HTTPException(404, str(e))
 
 
+def _autoload_offer_photos(intake, mgr, sid: str, lid: str, offer: str) -> int:
+    """Подтягивает фото продукта со страницы оффера AdRobot
+    (/kt/offer_groups/extended/?search_term=<оффер>) в изолированные замены
+    ленда. Уже скачанные (по имени) не дублируются. → сколько добавлено."""
+    import logging
+    import os
+    import re
+    log = logging.getLogger("session")
+    if intake is None or not (offer or "").strip():
+        return 0
+    existing = {r["name"] for r in mgr.list_replacements(sid, lid)}
+    try:
+        urls = intake.client.get_offer_product_images(offer)
+    except Exception:  # noqa: BLE001
+        log.exception("Фото группы %r: не удалось получить страницу оффера", offer)
+        urls = []
+    base = re.sub(r"[^\w.-]+", "_", offer.strip()) or "offer"
+    added = 0
+    for i, url in enumerate(urls):
+        ext = os.path.splitext(url.split("?")[0])[1] or ".png"
+        name = f"{base}{ext}" if i == 0 else f"{base}_{i + 1}{ext}"
+        if name in existing:
+            continue
+        try:
+            data, _fn, _ct = intake.client.download_attachment(url)
+            mgr.save_replacement(sid, lid, data, name)
+            added += 1
+        except Exception:  # noqa: BLE001
+            log.exception("Фото группы %r: не удалось скачать %s", offer, url)
+            continue
+    log.info("Фото группы %r: найдено %d url, добавлено %d (ленд %s/%s)",
+             offer, len(urls), added, sid, lid)
+    return added
+
+
 @app.get("/api/sessions/{sid}/landers/{lid}/replacements")
 def session_lander_replacements(request: Request, sid: str, lid: str, autoload: int = 0):
     """Изолированные по задаче медиа-замены + картинки из комментариев задачи.
@@ -742,8 +886,6 @@ def session_lander_replacements(request: Request, sid: str, lid: str, autoload: 
     autoload=1 — подтянуть фото продукта со страницы оффера (по названию оффера)
     в изолированную папку замен (если ещё не подтянуто).
     """
-    import os
-    import re
     from services.session import get_manager
     mgr = get_manager()
     s = mgr.get(sid)
@@ -755,24 +897,10 @@ def session_lander_replacements(request: Request, sid: str, lid: str, autoload: 
 
     intake = getattr(request.app.state, "intake", None)
 
-    if autoload and intake is not None:
-        offer = s.task_offer(ls.task_uid)
-        existing = {r["name"] for r in mgr.list_replacements(sid, lid)}
-        try:
-            urls = intake.client.get_offer_product_images(offer)
-        except Exception:  # noqa: BLE001
-            urls = []
-        base = re.sub(r"[^\w.-]+", "_", offer.strip()) or "offer"
-        for i, url in enumerate(urls):
-            ext = os.path.splitext(url.split("?")[0])[1] or ".png"
-            name = f"{base}{ext}" if i == 0 else f"{base}_{i + 1}{ext}"
-            if name in existing:
-                continue
-            try:
-                data, _fn, _ct = intake.client.download_attachment(url)
-                mgr.save_replacement(sid, lid, data, name)
-            except Exception:  # noqa: BLE001
-                continue
+    if autoload:
+        # ВАЖНО: оффер с учётом ручной подмены группы — после смены группы
+        # подтягивается фото продукта НОВОЙ группы.
+        _autoload_offer_photos(intake, mgr, sid, lid, s.lander_offer(ls))
 
     # Картинки из комментариев задачи (для ручного добавления в замены).
     comment_images: list[dict] = []
@@ -912,13 +1040,26 @@ class LanderGroupBody(BaseModel):
 
 
 @app.put("/api/sessions/{sid}/landers/{lid}/group")
-def session_set_lander_group(sid: str, lid: str, body: LanderGroupBody):
-    """Сменить «группу»/оффер ленда. Возвращает пересчитанный черновик параметров."""
+def session_set_lander_group(request: Request, sid: str, lid: str, body: LanderGroupBody):
+    """Сменить «группу»/оффер ленда. Возвращает пересчитанный черновик параметров.
+
+    Заодно подтягивает фото продукта НОВОЙ группы со страницы оффера AdRobot
+    в замены ленда (photos_added в ответе)."""
     from services.session import get_manager
+    mgr = get_manager()
     try:
-        return get_manager().set_lander_group(sid, lid, body.offer)
+        suggest = mgr.set_lander_group(sid, lid, body.offer)
     except KeyError as e:
         raise HTTPException(404, str(e))
+    intake = getattr(request.app.state, "intake", None)
+    try:
+        s = mgr.get(sid)
+        ls = s.landers.get(lid)
+        suggest["photos_added"] = _autoload_offer_photos(
+            intake, mgr, sid, lid, s.lander_offer(ls))
+    except Exception:  # noqa: BLE001 — фото не критично для смены группы
+        suggest["photos_added"] = 0
+    return suggest
 
 
 class AdaptBody(BaseModel):
@@ -950,6 +1091,234 @@ def session_adapt(sid: str, lid: str, body: AdaptBody):
         raise HTTPException(404, str(e))
     except ValueError as e:
         raise HTTPException(422, str(e))
+
+
+# ── VSL: конфиг, фото продукта, видео ────────────────────────
+@app.get("/api/sessions/{sid}/landers/{lid}/vsl-config")
+def vsl_config_get(sid: str, lid: str):
+    """Читает $config из config.php ленда (output-копия, иначе исходник)."""
+    from services import vsl
+    try:
+        return vsl.read_config(sid, lid)
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+
+
+class VslConfigBody(BaseModel):
+    config: dict = Field(..., description="Полный $config для записи в config.php")
+
+
+@app.put("/api/sessions/{sid}/landers/{lid}/vsl-config")
+def vsl_config_put(sid: str, lid: str, body: VslConfigBody):
+    """Записывает $config в config.php рабочей копии (создаёт копию при нужде)."""
+    from services import vsl
+    try:
+        res = vsl.write_config(sid, lid, body.config)
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    # scan-сводка ленда отражает конфиг — пересчитать после правки.
+    try:
+        vsl.refresh_scan(sid, lid)
+    except Exception:  # noqa: BLE001
+        pass
+    return res
+
+
+# ── VSL: библиотека комментариев по вертикалям ──────────────────
+@app.get("/api/vsl/comments/library")
+def vsl_comments_library():
+    """Сводка библиотеки VSL-комментариев: вертикаль → наборов/комментариев."""
+    from services import vsl_comments
+    from services.session import VERTICAL_CODE_TO_FULL
+    return {"library": vsl_comments.list_library(),
+            "verticals": [{"code": c, "name": n}
+                          for c, n in sorted(VERTICAL_CODE_TO_FULL.items())]}
+
+
+@app.post("/api/vsl/comments/harvest")
+def vsl_comments_harvest():
+    """Сбор комментариев из VSL-офферов Keitaro (SSE: step/vertical_done/done)."""
+    import json as _json
+    from fastapi.responses import StreamingResponse
+    from services.vsl_comments import harvest_stream
+
+    def gen():
+        inner = harvest_stream()
+        try:
+            for ev in inner:
+                yield f"data: {_json.dumps(ev, ensure_ascii=False)}\n\n"
+        except Exception as e:  # noqa: BLE001
+            yield f"data: {_json.dumps({'type': 'error', 'error': str(e)})}\n\n"
+        finally:
+            inner.close()
+
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache",
+                                      "X-Accel-Buffering": "no"})
+
+
+class VslCommentsApplyBody(BaseModel):
+    vertical: str = Field(..., description="Код вертикали (DI, PR, PT, …)")
+
+
+@app.post("/api/sessions/{sid}/landers/{lid}/vsl/comments/apply")
+def vsl_comments_apply(sid: str, lid: str, body: VslCommentsApplyBody):
+    """Вставить в конфиг ленда все сохранённые комментарии вертикали."""
+    from services import vsl, vsl_comments
+    try:
+        res = vsl_comments.apply_comments(sid, lid, body.vertical)
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    try:
+        vsl.refresh_scan(sid, lid)
+    except Exception:  # noqa: BLE001
+        pass
+    return res
+
+
+class VslCommentsTranslateBody(BaseModel):
+    target_lang: Optional[str] = Field(None, description="Язык (пусто = по гео)")
+
+
+@app.post("/api/sessions/{sid}/landers/{lid}/vsl/comments/translate")
+def vsl_comments_translate(sid: str, lid: str, body: VslCommentsTranslateBody):
+    """Перевести имя+текст комментариев конфига (deepseek, имена под гео)."""
+    from services import vsl_comments
+    try:
+        return vsl_comments.translate_comments(sid, lid, body.target_lang)
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+
+
+@app.post("/api/sessions/{sid}/landers/{lid}/vsl-product-image")
+async def vsl_product_image(sid: str, lid: str, file: UploadFile = File(...)):
+    """Загружает фото продукта VSL: конвертируется в PNG, кладётся в архив
+    как product.png и прописывается в config.orderForm.productImage."""
+    from services import vsl
+    from starlette.concurrency import run_in_threadpool
+    data = await file.read()
+    if not data:
+        raise HTTPException(400, "Пустой файл")
+    try:
+        return await run_in_threadpool(vsl.set_product_image, sid, lid, data)
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+
+
+@app.post("/api/sessions/{sid}/landers/{lid}/vsl-product-image/from-group")
+def vsl_product_image_from_group(request: Request, sid: str, lid: str):
+    """Подтягивает фото продукта ГРУППЫ ленда со страницы оффера AdRobot
+    (/kt/offer_groups/extended/?search_term=<группа>) и ставит его как
+    product.png в конфиг VSL. → {found, offer, name?}."""
+    from services import vsl
+    from services.session import get_manager
+    intake = _require_intake(request)
+    mgr = get_manager()
+    s = mgr.get(sid)
+    ls = s.landers.get(lid) if s else None
+    if ls is None:
+        raise HTTPException(404, "Ленд не найден")
+    offer = s.lander_offer(ls)
+    try:
+        urls = intake.client.get_offer_product_images(offer)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"AdRobot: {e}")
+    if not urls:
+        return {"found": False, "offer": offer}
+    try:
+        data, _fn, _ct = intake.client.download_attachment(urls[0])
+        res = vsl.set_product_image(sid, lid, data)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"Не удалось скачать/поставить фото: {e}")
+    return {"found": True, "offer": offer, **res}
+
+
+@app.get("/api/sessions/{sid}/landers/{lid}/vsl-download")
+def vsl_download(sid: str, lid: str):
+    """Отдаёт архив VSL-ленда с текущим конфигом/правками (рабочую копию;
+    создаёт её из шаблона, если правок ещё не было)."""
+    from fastapi.responses import FileResponse
+    from services import vsl
+    try:
+        p = vsl.ensure_output(sid, lid)
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    return FileResponse(p, filename=p.name, media_type="application/zip")
+
+
+@app.post("/api/sessions/{sid}/landers/{lid}/vsl-video")
+async def vsl_video_start(sid: str, lid: str,
+                          file: UploadFile | None = File(None),
+                          m3u8_url: str = Form("")):
+    """Запускает подготовку видео VSL: mp4-файл ИЛИ ссылка m3u8 → HLS + постер
+    → архив содержимого папки видео. Долгая фоновая задача — статус poll'ится."""
+    from services import vsl_video
+    data = await file.read() if file is not None else None
+    try:
+        return vsl_video.start_job(sid, lid, upload=data or None,
+                                   m3u8_url=m3u8_url or None)
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+    except (ValueError, RuntimeError) as e:
+        raise HTTPException(422, str(e))
+
+
+@app.get("/api/sessions/{sid}/landers/{lid}/vsl-video")
+def vsl_video_status(sid: str, lid: str):
+    """Статус подготовки видео + готовый архив (имя/размер), если есть."""
+    from services import vsl_video
+    try:
+        return vsl_video.job_status(sid, lid)
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+
+
+class VslVideoNameBody(BaseModel):
+    name: str = Field(..., description="Новое имя архива видео (= папки на CDN)")
+
+
+@app.put("/api/sessions/{sid}/landers/{lid}/vsl-video/name")
+def vsl_video_rename(sid: str, lid: str, body: VslVideoNameBody):
+    """Переименовывает архив видео и обновляет ссылки src/poster в config.php
+    (меняется только имя папки в ссылках)."""
+    from services import vsl_video
+    try:
+        return vsl_video.rename_archive(sid, lid, body.name)
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+
+
+@app.get("/api/sessions/{sid}/landers/{lid}/vsl-video/download")
+def vsl_video_download(sid: str, lid: str):
+    """Отдаёт готовый архив видео (содержимое папки для CDN)."""
+    from fastapi.responses import FileResponse
+    from services import vsl_video
+    from services.session import get_manager
+    s = get_manager().get(sid)
+    ls = s.landers.get(lid) if s else None
+    if ls is None:
+        raise HTTPException(404, "Ленд не найден")
+    name = (ls.adapt_params or {}).get("vsl_archive_name") or ""
+    p = vsl_video.archive_path(sid, lid, name) if name else None
+    if not p or not p.exists():
+        raise HTTPException(404, "Архив видео ещё не создан")
+    return FileResponse(p, filename=p.name, media_type="application/zip")
 
 
 # ── История версий ленда (откат «на шаг назад») ──────────────
@@ -1020,11 +1389,16 @@ def translate_stream(sid: str, lid: str, body: TranslateBody):
     from services.translate import translate_lander_stream
 
     def gen():
+        inner = translate_lander_stream(sid, lid, target_lang=body.target_lang)
         try:
-            for ev in translate_lander_stream(sid, lid, target_lang=body.target_lang):
+            for ev in inner:
                 yield f"data: {_json.dumps(ev, ensure_ascii=False)}\n\n"
         except Exception as e:  # noqa: BLE001
             yield f"data: {_json.dumps({'type': 'error', 'error': str(e)})}\n\n"
+        finally:
+            # Клиент оборвал SSE (кнопка «Стоп») → закрываем ВНУТРЕННИЙ генератор
+            # сразу: GeneratorExit гасит пул батчей и НЕ применяет перевод.
+            inner.close()
 
     return StreamingResponse(gen(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
@@ -1062,11 +1436,11 @@ async def media_edit(sid: str, lid: str,
 
 # ── Заливка ленда в Keitaro (создание оффера) ───────────────
 @app.get("/api/sessions/{sid}/landers/{lid}/keitaro-plan")
-def keitaro_plan(sid: str, lid: str, type: str | None = None):
+def keitaro_plan(sid: str, lid: str, type: str | None = None, adult: int = 0):
     """Dry-run план заливки (БЕЗ обращения к Keitaro): что будет создано."""
     from services.keitaro_upload import prepare_plan
     try:
-        plan = prepare_plan(sid, lid, site_type=type)
+        plan = prepare_plan(sid, lid, site_type=type, adult=bool(adult))
         plan["mode"] = "dry-run"
         return plan
     except ValueError as e:
@@ -1076,6 +1450,7 @@ def keitaro_plan(sid: str, lid: str, type: str | None = None):
 class KeitaroUploadBody(BaseModel):
     type: str | None = Field(None, description="Переопределить тип сайта (land|pl|vsl)")
     network: str | None = Field(None, description="Принудительно задать партнёрскую сеть (номер)")
+    adult: bool = Field(False, description="Adult-пометка в названии: [pl fi -] → [pl fi adult]")
 
 
 @app.post("/api/sessions/{sid}/landers/{lid}/keitaro-upload")
@@ -1087,7 +1462,7 @@ def keitaro_upload(sid: str, lid: str, body: KeitaroUploadBody):
     from services.keitaro_upload import upload
     try:
         return upload(sid, lid, execute=True, site_type=body.type,
-                      network_override=body.network)
+                      network_override=body.network, adult=body.adult)
     except ValueError as e:
         raise HTTPException(422, str(e))
     except Exception as e:  # noqa: BLE001
@@ -1097,6 +1472,7 @@ def keitaro_upload(sid: str, lid: str, body: KeitaroUploadBody):
 class KeitaroRenameBody(BaseModel):
     offer_id: int = Field(..., description="Подтверждённый пользователем id оффера")
     type: str | None = Field(None, description="Тип сайта (для сборки имени)")
+    adult: bool = Field(False, description="Adult-пометка в названии")
 
 
 @app.post("/api/sessions/{sid}/landers/{lid}/keitaro-rename")
@@ -1106,7 +1482,8 @@ def keitaro_rename(sid: str, lid: str, body: KeitaroRenameBody):
     Запускается ТОЛЬКО после того, как пользователь проверил/выбрал id в UI."""
     from services.keitaro_upload import rename_offer
     try:
-        return rename_offer(sid, lid, body.offer_id, site_type=body.type)
+        return rename_offer(sid, lid, body.offer_id, site_type=body.type,
+                            adult=body.adult)
     except ValueError as e:
         raise HTTPException(422, str(e))
     except Exception as e:  # noqa: BLE001
@@ -1268,7 +1645,8 @@ def keitaro_upload_stream(sid: str, lid: str, body: KeitaroUploadBody):
     def _run() -> None:
         try:
             res = upload(sid, lid, execute=True, site_type=body.type,
-                         network_override=body.network, on_progress=_progress)
+                         network_override=body.network, adult=body.adult,
+                         on_progress=_progress)
             q.put({"type": "done", "result": res})
         except Exception as e:  # noqa: BLE001
             q.put({"type": "error", "error": str(e)})
@@ -1344,17 +1722,21 @@ def keitaro_offer_names(body: OfferNamesBody):
 # ── Чат-агент по ленду (AITUNNEL / Kimi) ────────────────────
 @app.get("/api/ai/status")
 def ai_status():
-    """Настроен ли AI-агент (есть ключ AITUNNEL) + модель и баланс."""
+    """Настроен ли AI-агент (ключ AITUNNEL и/или локальная модель) + баланс."""
     import os
-    from connectors.aitunnel import client_from_env, DEFAULT_MODEL, available_models
+    from connectors.aitunnel import (client_from_env, DEFAULT_MODEL,
+                                     available_models, local_llm_info)
     client = client_from_env()
+    local = local_llm_info()
     if client is None:
-        return {"configured": False, "model": None, "balance": None, "models": []}
+        return {"configured": False, "model": None, "balance": None,
+                "models": [], "local": None}
     return {
         "configured": True,
         "model": os.getenv("AITUNNEL_MODEL", DEFAULT_MODEL),
         "balance": client.balance(),
         "models": available_models(),
+        "local": local,  # {base_url, model} | null — локальный сервер
     }
 
 

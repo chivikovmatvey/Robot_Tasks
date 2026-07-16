@@ -18,7 +18,8 @@ import { Icon } from './Icon';
 // Работает и с адаптированным zip (outputs), и с исходником (session__sid__lid).
 // ============================================================================
 
-const TEXT_EXTS = new Set(['php', 'html', 'htm', 'css', 'js', 'json', 'txt', 'xml']);
+// blink — CSS из сохранённых Chrome-ом страниц (mhtml), правится как css
+const TEXT_EXTS = new Set(['php', 'html', 'htm', 'css', 'js', 'json', 'txt', 'xml', 'blink']);
 
 // Русские подписи панели поиска/замены CodeMirror (Ctrl+F).
 const RU_PHRASES = EditorState.phrases.of({
@@ -47,7 +48,7 @@ function langFor(path: string) {
   switch (extOf(path)) {
     case 'php': return [php()];
     case 'html': case 'htm': return [html()];
-    case 'css': return [cssLang()];
+    case 'css': case 'blink': return [cssLang()];
     case 'js': return [javascript()];
     case 'json': return [jsonLang()];
     default: return [];
@@ -92,6 +93,37 @@ function patchCssRule(text: string, selector: string, decls: string): string | n
   const parts = decls.split(';').map((s) => s.trim()).filter(Boolean);
   const body = parts.length ? '\n  ' + parts.join(';\n  ') + ';\n' : '\n';
   return text.slice(0, open) + body + text.slice(close);
+}
+
+/** CSSOM отдаёт url(...) переписанными на /api/preview/... — перед сохранением
+ *  в файл возвращаем пути внутри архива (относительно папки css-файла). */
+function unrewriteUrls(decls: string, cssPath: string | null): string {
+  return decls.replace(/url\(\s*(['"]?)([^)'"]+)\1\s*\)/gi, (m, _q, u) => {
+    const inner = innerPathOf(u);
+    if (!inner) return m; // не наш api-путь (data:, http, относительный) — не трогаем
+    const dir = cssPath && cssPath.includes('/') ? cssPath.slice(0, cssPath.lastIndexOf('/')) : '';
+    let rel = inner;
+    if (dir && inner.startsWith(dir + '/')) rel = inner.slice(dir.length + 1);
+    else if (dir) rel = dir.split('/').map(() => '..').join('/') + '/' + inner;
+    return `url("${rel}")`;
+  });
+}
+
+/** Дописывает override-правило: css-файл — в конец (каскад побеждает),
+ *  html/php — в блок <style data-ws-edits> (создаётся перед </head>). */
+function appendOverrideRule(text: string, path: string, rule: string): string {
+  if (extOf(path) === 'css' || extOf(path) === 'blink') {
+    return text.replace(/\s*$/, '') + `\n\n/* ws-edit */\n${rule}\n`;
+  }
+  const wsIdx = text.indexOf('<style data-ws-edits>');
+  if (wsIdx !== -1) {
+    const close = text.indexOf('</style>', wsIdx);
+    if (close !== -1) return text.slice(0, close) + rule + '\n' + text.slice(close);
+  }
+  const block = `<style data-ws-edits>\n${rule}\n</style>`;
+  const m = /<\/head>/i.exec(text) || /<\/body>/i.exec(text);
+  return m ? text.slice(0, m.index) + block + '\n' + text.slice(m.index)
+           : text + '\n' + block;
 }
 
 /** Пишет style="…" в открывающий тег по точной позиции (line/col из data-src-*). */
@@ -464,21 +496,24 @@ export function LanderEditor({ zipName }: { zipName: string }) {
 
   const saveRuleToFile = useCallback(async (rv: RuleView) => {
     const path = rv.innerPath ?? entryFile;
-    const decls = ruleEdits[rv.id] ?? rv.decls;
+    const decls = unrewriteUrls(ruleEdits[rv.id] ?? rv.decls, rv.innerPath);
     let text: string;
     try { text = buffers[path]?.text ?? await fetchFile(path); }
     catch (e: any) { flash(`Не прочитал ${path}: ${e.message}`); return; }
-    const patched = patchCssRule(text, rv.selector, decls);
+    let patched = patchCssRule(text, rv.selector, decls);
     if (patched === null) {
-      // не нашли ровно одно вхождение — открываем файл на селекторе
-      setBuffers((b) => (b[path] ? b : { ...b, [path]: { text, saved: text } }));
-      openAt(path, { needle: rv.selector });
-      flash('Не нашёл однозначное правило в файле — правь в коде (курсор на селекторе)');
-      return;
+      // Селектор в файле не нашёлся ровно один раз (минифицированный css,
+      // дубли в @media) — РАНЬШЕ правка отклонялась и «терялась» после
+      // перезагрузки. Теперь дописываем override-правило в конец: каскад
+      // с той же специфичностью побеждает, правка сохраняется всегда.
+      const rule = (rv.media ? `@media ${rv.media} { ` : '')
+        + `${rv.selector} { ${decls} }` + (rv.media ? ' }' : '');
+      patched = appendOverrideRule(text, path, rule);
+      flash('Правило неоднозначно в файле — дописан override в конец (каскад)');
     }
     setBuffers((b) => ({ ...b, [path]: { text: patched, saved: b[path]?.saved ?? text } }));
     await saveFile(path, patched);
-  }, [entryFile, ruleEdits, buffers, fetchFile, flash, openAt, saveFile]);
+  }, [entryFile, ruleEdits, buffers, fetchFile, flash, saveFile]);
 
   const applyInlineLive = useCallback((v: string) => {
     setInlineEdit(v);

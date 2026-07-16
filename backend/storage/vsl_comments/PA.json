@@ -1,0 +1,434 @@
+{
+ "vertical": "PARASITES",
+ "sets": [
+  {
+   "offer_id": 20091,
+   "offer_name": "20091 Detox Now [PARASITES-CO] [vsl es ] ReactJS v5",
+   "geo": "CO",
+   "lang": "es",
+   "comments": [
+    {
+     "index": 0,
+     "name": "Laura Gómez",
+     "text": "Es muy bueno contra los parásitos, ¡lo voy a probar!",
+     "likes": 85,
+     "avatar": "avatars/11.jpeg",
+     "appearAtPercent": 5,
+     "replies": []
+    },
+    {
+     "index": 1,
+     "name": "Patricia Ramírez",
+     "text": "El video me pareció corto, esperaba más información sobre los parásitos, pero me gustó y empezaré a aplicar todo lo que enseña.",
+     "likes": 79,
+     "avatar": "avatars/12.jpeg",
+     "appearAtPercent": 12,
+     "replies": []
+    },
+    {
+     "index": 2,
+     "name": "Luis Martínez",
+     "text": "Todas las personas que luchan contra los parásitos deberían ver esto; lo que explica es increíble, nunca pensé que fuera posible.",
+     "likes": 81,
+     "avatar": "avatars/3.jpeg",
+     "appearAtPercent": 19,
+     "replies": []
+    },
+    {
+     "index": 3,
+     "name": "Alejandro Torres",
+     "text": "¡Amén! Que Dios bendiga esta solución contra los parásitos.",
+     "likes": 66,
+     "avatar": "avatars/4.jpeg",
+     "appearAtPercent": 26,
+     "replies": []
+    },
+    {
+     "index": 4,
+     "name": "Carmen Rodríguez",
+     "text": "Que Dios bendiga a este hombre por ayudarnos a combatir los parásitos.",
+     "likes": 50,
+     "avatar": "avatars/13.jpeg",
+     "appearAtPercent": 33,
+     "replies": []
+    },
+    {
+     "index": 5,
+     "name": "Rosa Herrera",
+     "text": "De verdad espero que me ayude a desparasitarme, ¡he probado tantas cosas! Pero esto tiene todo el sentido.",
+     "likes": 47,
+     "avatar": "avatars/14.jpeg",
+     "appearAtPercent": 40,
+     "replies": [
+      {
+       "index": 0,
+       "name": "Miguel Herrera",
+       "text": "¡Increíble @Rosa! Empiezo hoy con mi esposa... los dos tenemos problemas con parásitos.",
+       "avatar": "avatars/7.jpeg",
+       "likes": 41,
+       "appearAtPercent": 47
+      }
+     ]
+    },
+    {
+     "index": 6,
+     "name": "Carlos Rojas",
+     "text": "Nunca había escuchado esto sobre los parásitos, parecía raro, pero tiene mucho sentido... ya empecé y me está funcionando desde los primeros días.",
+     "likes": 40,
+     "avatar": "avatars/2.jpeg",
+     "appearAtPercent": 50,
+     "replies": []
+    },
+    {
+     "index": 7,
+     "name": "Ana Beltrán",
+     "text": "¿De verdad funciona contra los parásitos?",
+     "likes": 18,
+     "avatar": "avatars/9.jpeg",
+     "appearAtPercent": 58,
+     "replies": [
+      {
+       "index": 0,
+       "name": "Rosa Herrera",
+       "text": "Sí @Ana, de verdad funciona; yo soy la prueba viviente... estaba desesperada por los parásitos... gracias a este video empecé a desparasitarme. Toda mi familia está feliz y comparto este video todos los días.",
+       "avatar": "avatars/15.jpeg",
+       "likes": 22,
+       "appearAtPercent": 62
+      }
+     ]
+    },
+    {
+     "index": 8,
+     "name": "Giovanni Castro",
+     "text": "La solución contra los parásitos siempre estuvo ahí... pero nadie la veía. Muchas gracias, trajiste luz y esperanza.",
+     "likes": 17,
+     "avatar": "avatars/5.jpeg",
+     "appearAtPercent": 68,
+     "replies": []
+    },
+    {
+     "index": 9,
+     "name": "Andrea Morales",
+     "text": "No me gustó la edición del video... ¡pero entendí todo perfectamente! Creo en lo que explica sobre los parásitos.",
+     "likes": 15,
+     "avatar": "avatars/10.jpeg",
+     "appearAtPercent": 75,
+     "replies": []
+    },
+    {
+     "index": 10,
+     "name": "María Cárdenas",
+     "text": "Voy a enviar este video a más personas; conozco gente con parásitos que puede mejorar su calidad de vida con esta información.",
+     "likes": 11,
+     "avatar": "avatars/9.jpeg",
+     "appearAtPercent": 82,
+     "replies": []
+    },
+    {
+     "index": 11,
+     "name": "Julio Mendoza",
+     "text": "Apenas empecé a ver este video ya me dio una nueva forma de entender cómo combatir los parásitos.",
+     "likes": 9,
+     "avatar": "avatars/8.jpeg",
+     "appearAtPercent": 89,
+     "replies": []
+    },
+    {
+     "index": 12,
+     "name": "Mario Pineda",
+     "text": "Esto puede parecer un poco polémico, pero vale la pena verlo para formarse una opinión sobre los parásitos.",
+     "likes": 8,
+     "avatar": "avatars/1.jpeg",
+     "appearAtPercent": 95,
+     "replies": []
+    }
+   ]
+  },
+  {
+   "offer_id": 18062,
+   "offer_name": "18062 Cleorix Low [PARASITES-BG] [vsl bg-] ReactJs 2.0",
+   "geo": "BG",
+   "lang": "bg",
+   "comments": [
+    {
+     "index": 0,
+     "name": "Мария Петрова",
+     "text": "Най-накрая разбрах как ефективно да се справя с паразитите, ще следвам тези съвети!",
+     "likes": 85,
+     "avatar": "avatars/11.jpeg",
+     "appearAtPercent": 5,
+     "replies": []
+    },
+    {
+     "index": 1,
+     "name": "Елена Иванова",
+     "text": "Видеото е кратко, но много полезно. Обяснява добре как да се освободим от паразитите, ще го приложа на практика.",
+     "likes": 79,
+     "avatar": "avatars/12.jpeg",
+     "appearAtPercent": 12,
+     "replies": []
+    },
+    {
+     "index": 2,
+     "name": "Георги Димитров",
+     "text": "Всеки, който подозира, че има паразити, трябва да гледа това видео — информацията е невероятна!",
+     "likes": 81,
+     "avatar": "avatars/3.jpeg",
+     "appearAtPercent": 19,
+     "replies": []
+    },
+    {
+     "index": 3,
+     "name": "Стоян Колев",
+     "text": "Благодаря, че споделяте тези съвети как да изчистим организма от паразити по естествен начин!",
+     "likes": 66,
+     "avatar": "avatars/4.jpeg",
+     "appearAtPercent": 26,
+     "replies": []
+    },
+    {
+     "index": 4,
+     "name": "Десислава Стоянова",
+     "text": "Благословии за това, че ни показвате как да се преборим с паразитите и да възстановим здравето си",
+     "likes": 50,
+     "avatar": "avatars/13.jpeg",
+     "appearAtPercent": 33,
+     "replies": []
+    },
+    {
+     "index": 5,
+     "name": "Анна Христова",
+     "text": "Надявам се тези съвети наистина да ми помогнат с проблема с паразитите. Всичко звучи много логично.",
+     "likes": 47,
+     "avatar": "avatars/14.jpeg",
+     "appearAtPercent": 40,
+     "replies": [
+      {
+       "index": 0,
+       "name": "Петър Николов",
+       "text": "Невероятно @Анна! Започвам днес… искам най-накрая да изчистя организма си от паразити.",
+       "avatar": "avatars/7.jpeg",
+       "likes": 41,
+       "appearAtPercent": 47
+      }
+     ]
+    },
+    {
+     "index": 6,
+     "name": "Любомир Тодоров",
+     "text": "Никога не бях чувал за този метод срещу паразитите, изглеждаше странно, но забелязвам промени още в първите дни!",
+     "likes": 40,
+     "avatar": "avatars/2.jpeg",
+     "appearAtPercent": 50,
+     "replies": []
+    },
+    {
+     "index": 8,
+     "name": "Снежана Пенева",
+     "text": "Наистина ли работи срещу паразитите?",
+     "likes": 18,
+     "avatar": "avatars/9.jpeg",
+     "appearAtPercent": 58,
+     "replies": [
+      {
+       "index": 0,
+       "name": "Анна Христова",
+       "text": "Да @Снежана, наистина работи. Симптомите от паразитите вече ги няма. Щастлива съм и следвам тези съвети всеки ден.",
+       "avatar": "avatars/15.jpeg",
+       "likes": 22,
+       "appearAtPercent": 62
+      }
+     ]
+    },
+    {
+     "index": 9,
+     "name": "Михаил Янков",
+     "text": "Решението на проблема с паразитите винаги е било пред нас… просто не бяхме забелязали. Благодаря, че ни давате надежда!",
+     "likes": 17,
+     "avatar": "avatars/5.jpeg",
+     "appearAtPercent": 68,
+     "replies": []
+    },
+    {
+     "index": 10,
+     "name": "Полина Василева",
+     "text": "Не ми хареса много монтажът на видеото, но съветите за прочистване от паразити са много полезни.",
+     "likes": 15,
+     "avatar": "avatars/10.jpeg",
+     "appearAtPercent": 75,
+     "replies": []
+    },
+    {
+     "index": 11,
+     "name": "Галина Маринова",
+     "text": "Ще изпратя това видео на приятели и роднини, които имат проблеми с паразити — наистина може да помогне.",
+     "likes": 11,
+     "avatar": "avatars/9.jpeg",
+     "appearAtPercent": 82,
+     "replies": []
+    },
+    {
+     "index": 12,
+     "name": "Радослав Захариев",
+     "text": "Веднага щом започнах да гледам видеото, разбрах нов подход за естествено прочистване от паразити.",
+     "likes": 9,
+     "avatar": "avatars/8.jpeg",
+     "appearAtPercent": 89,
+     "replies": []
+    },
+    {
+     "index": 13,
+     "name": "Цветан Гоцев",
+     "text": "Това е важна тема, заслужава си да се изгледа, за да научим как да защитим организма си от паразити.",
+     "likes": 8,
+     "avatar": "avatars/1.jpeg",
+     "appearAtPercent": 95,
+     "replies": []
+    }
+   ]
+  },
+  {
+   "offer_id": 16936,
+   "offer_name": "16936 Paratozol Low [PARASITES-LT] [vsl lt-] ReactJs 2.0",
+   "geo": "LT",
+   "lang": "lt",
+   "comments": [
+    {
+     "index": 0,
+     "name": "Rūta Kazlauskienė",
+     "text": "Pagaliau supratau, kaip efektyviai atsikratyti parazitų – tikrai laikysiu šių patarimų!",
+     "likes": 85,
+     "avatar": "avatars/11.jpeg",
+     "appearAtPercent": 5,
+     "replies": []
+    },
+    {
+     "index": 1,
+     "name": "Jolanta Petrauskienė",
+     "text": "Vaizdo įrašas trumpas, bet labai naudingas. Gerai paaiškina, kaip sumažinti parazitų sukeliamus simptomus ir išvalyti organizmą – tikrai išbandysiu.",
+     "likes": 79,
+     "avatar": "avatars/12.jpeg",
+     "appearAtPercent": 12,
+     "replies": []
+    },
+    {
+     "index": 2,
+     "name": "Tomas Jankauskas",
+     "text": "Visi, kurie kenčia nuo parazitų ar virškinimo problemų, turėtų pamatyti šį vaizdo įrašą – informacija tiesiog neįtikėtina!",
+     "likes": 81,
+     "avatar": "avatars/3.jpeg",
+     "appearAtPercent": 19,
+     "replies": []
+    },
+    {
+     "index": 3,
+     "name": "Mindaugas Stankevičius",
+     "text": "Ačiū, kad pasidalijote šiais patarimais, kaip natūraliai atsikratyti parazitų organizme!",
+     "likes": 66,
+     "avatar": "avatars/4.jpeg",
+     "appearAtPercent": 26,
+     "replies": []
+    },
+    {
+     "index": 4,
+     "name": "Daiva Mockevičienė",
+     "text": "Ačiū, kad parodėte, kaip išvalyti organizmą nuo parazitų be operacijos ar stiprių vaistų",
+     "likes": 50,
+     "avatar": "avatars/13.jpeg",
+     "appearAtPercent": 33,
+     "replies": []
+    },
+    {
+     "index": 5,
+     "name": "Eglė Butkutė",
+     "text": "Tikiu, kad šie patarimai tikrai padės man kovoti su parazitais. Viskas labai logiškai paaiškinta.",
+     "likes": 47,
+     "avatar": "avatars/14.jpeg",
+     "appearAtPercent": 40,
+     "replies": [
+      {
+       "index": 0,
+       "name": "Giedrius Laurinavičius",
+       "text": "Nuostabu @Egle! Pradedu šiandien – noriu pagaliau atsikratyti parazitų kartą ir visiems laikams.",
+       "avatar": "avatars/7.jpeg",
+       "likes": 41,
+       "appearAtPercent": 47
+      }
+     ]
+    },
+    {
+     "index": 6,
+     "name": "Valdas Žukauskas",
+     "text": "Niekada nebuvau girdėjęs apie šį parazitų šalinimo metodą, atrodė keistai, bet jau per pirmąsias dienas jaučiu pokyčius!",
+     "likes": 40,
+     "avatar": "avatars/2.jpeg",
+     "appearAtPercent": 50,
+     "replies": []
+    },
+    {
+     "index": 8,
+     "name": "Kristina Paulauskienė",
+     "text": "Ar tai tikrai veikia prieš parazitus?",
+     "likes": 18,
+     "avatar": "avatars/9.jpeg",
+     "appearAtPercent": 58,
+     "replies": [
+      {
+       "index": 0,
+       "name": "Eglė Butkutė",
+       "text": "Taip @Kristina, tikrai veikia. Mano organizmas jau nebereaguoja taip kaip anksčiau. Esu laiminga ir kasdien laikau šių patarimų.",
+       "avatar": "avatars/15.jpeg",
+       "likes": 22,
+       "appearAtPercent": 62
+      }
+     ]
+    },
+    {
+     "index": 9,
+     "name": "Artūras Rimkus",
+     "text": "Sprendimas nuo parazitų visada buvo čia pat… tiesiog to nesuvokėme. Labai ačiū, kad suteikėte vilties!",
+     "likes": 17,
+     "avatar": "avatars/5.jpeg",
+     "appearAtPercent": 68,
+     "replies": []
+    },
+    {
+     "index": 10,
+     "name": "Virginija Černiauskienė",
+     "text": "Vaizdo įrašo montažas man nelabai patiko, tačiau patarimai, kaip kovoti su parazitais, yra labai naudingi.",
+     "likes": 15,
+     "avatar": "avatars/10.jpeg",
+     "appearAtPercent": 75,
+     "replies": []
+    },
+    {
+     "index": 11,
+     "name": "Lina Jakštienė",
+     "text": "Išsiųsiu šį vaizdo įrašą draugams ir šeimos nariams, kurie kenčia nuo parazitų – tai tikrai gali padėti.",
+     "likes": 11,
+     "avatar": "avatars/9.jpeg",
+     "appearAtPercent": 82,
+     "replies": []
+    },
+    {
+     "index": 12,
+     "name": "Saulius Bernatonis",
+     "text": "Vos pradėjus žiūrėti vaizdo įrašą, iš karto supratau naują požiūrį į parazitų šalinimą natūraliu būdu.",
+     "likes": 9,
+     "avatar": "avatars/8.jpeg",
+     "appearAtPercent": 89,
+     "replies": []
+    },
+    {
+     "index": 13,
+     "name": "Darius Aleksa",
+     "text": "Tai svarbi tema – verta pamatyti, kad sužinotumėte, kaip apsaugoti organizmą nuo parazitų ir jų sukeliamų ligų.",
+     "likes": 8,
+     "avatar": "avatars/1.jpeg",
+     "appearAtPercent": 95,
+     "replies": []
+    }
+   ]
+  }
+ ]
+}

@@ -63,20 +63,24 @@ def detect_site_type(zip_path: Path, scan: Optional[dict]) -> str:
 
 
 def build_offer_name(product: str, bracket: str, site_type: str, lang: str,
-                     offer_id: Optional[int] = None) -> str:
+                     offer_id: Optional[int] = None, adult: bool = False) -> str:
     """Собирает название оффера. offer_id=None — без префикса id (для создания,
-    id подставляется после, когда станет известен фактический)."""
+    id подставляется после, когда станет известен фактический).
+    adult — третья позиция скобки: '-' → 'adult' ([pl fi -] → [pl fi adult])."""
     prefix = f"{offer_id} " if offer_id is not None else ""
     br = bracket or ""  # уже со скобками: '[PARASITES-CO]'
+    mark = "adult" if adult else "-"
     if site_type == "vsl":
-        tail = f"[vsl {lang} ] {vsl_react_template()}"
+        # Пример: '20490 Sustarox [JOINT-EC] [vsl es -] ReactJS v5'
+        tail = f"[vsl {lang} {mark}] {vsl_react_template()}"
     else:
-        tail = f"[{site_type} {lang} -]"
+        tail = f"[{site_type} {lang} {mark}]"
     parts = [p for p in (br, tail) if p]
     return f"{prefix}{product} {' '.join(parts)}".strip()
 
 
-def prepare_plan(sid: str, lid: str, site_type: Optional[str] = None) -> dict:
+def prepare_plan(sid: str, lid: str, site_type: Optional[str] = None,
+                 adult: bool = False) -> dict:
     """Собирает план заливки ИЗ СЕССИИ (без обращения к Keitaro).
 
     Возвращает всё, что известно локально: zip, группа (оффер задачи), продукт,
@@ -111,7 +115,9 @@ def prepare_plan(sid: str, lid: str, site_type: Optional[str] = None) -> dict:
     geo_info = geos.get(geo_id, {}) or {}
     lang = geo_info.get("lang_html", "es") or "es"
     country_name = geo_info.get("country_name", "") or ""
-    stype = site_type or detect_site_type(zip_path, ls.scan)
+    # VSL-сессия всегда даёт тип vsl (работаем от эталонного шаблона).
+    stype = site_type or ("vsl" if getattr(s, "is_vsl", False)
+                          else detect_site_type(zip_path, ls.scan))
 
     # Скобка [ВЕРТИКАЛЬ-ГЕО] строится ИЗ ГРУППЫ (вертикаль + целевое гео), а не
     # копируется с донора (донор давал не ту вертикаль/гео).
@@ -122,6 +128,7 @@ def prepare_plan(sid: str, lid: str, site_type: Optional[str] = None) -> dict:
         "sid": sid,
         "lid": lid,
         "adapted": adapted,
+        "adult": adult,
         "zip_path": str(zip_path),
         "group": group,
         "product": product,
@@ -132,7 +139,8 @@ def prepare_plan(sid: str, lid: str, site_type: Optional[str] = None) -> dict:
         "lang": lang,
         "site_type": stype,
         "bracket": bracket,
-        "name_template": build_offer_name(product, bracket or "[VERTICAL-GEO]", stype, lang),
+        "name_template": build_offer_name(product, bracket or "[VERTICAL-GEO]",
+                                          stype, lang, adult=adult),
         "vertical_code": parsed.get("vertical") or "",
         "vertical_full": vertical_full,
     }
@@ -141,13 +149,15 @@ def prepare_plan(sid: str, lid: str, site_type: Optional[str] = None) -> dict:
 def upload(sid: str, lid: str, *, execute: bool = False,
            site_type: Optional[str] = None,
            network_override: Optional[str] = None,
+           adult: bool = False,
            on_progress: Optional[callable] = None) -> dict:
     """Заливка ленда. execute=False (по умолчанию) — dry-run без Keitaro.
 
     network_override — принудительно задать партнёрскую сеть (если авто-детект с
-    донора ошибается). on_progress(msg) — колбэк шагов для UI.
+    донора ошибается). adult — пометка '[.. .. adult]' в названии.
+    on_progress(msg) — колбэк шагов для UI.
     """
-    plan = prepare_plan(sid, lid, site_type=site_type)
+    plan = prepare_plan(sid, lid, site_type=site_type, adult=adult)
 
     def _step(msg: str) -> None:
         if on_progress:
@@ -184,7 +194,7 @@ def upload(sid: str, lid: str, *, execute: bool = False,
         # это делает пользователь после ПОДТВЕРЖДЕНИЯ id (см. rename_offer ниже).
         # Авто-выбор id опасен: был инцидент с переименованием чужого оффера 6506.
         name_no_id = build_offer_name(plan["product"], bracket,
-                                      plan["site_type"], plan["lang"])
+                                      plan["site_type"], plan["lang"], adult=adult)
         detection = kt.create_offer(
             name=name_no_id,
             group=plan["group"],
@@ -199,7 +209,7 @@ def upload(sid: str, lid: str, *, execute: bool = False,
         # Предполагаемое финальное имя для лучшего кандидата (если уверенно).
         proposed_name = build_offer_name(
             plan["product"], bracket, plan["site_type"], plan["lang"],
-            offer_id=best) if best else None
+            offer_id=best, adult=adult) if best else None
 
         # АВТО-ПЕРЕИМЕНОВАНИЕ: если детекция уверенная (точное совпадение
         # названия без id-префикса) — сразу дописываем id, без подтверждения.
@@ -254,17 +264,17 @@ def _record_publish(sid: str, lid: str, offer_id: int, final_name: str, plan: di
 
 
 def rename_offer(sid: str, lid: str, offer_id: int, *,
-                 site_type: Optional[str] = None) -> dict:
+                 site_type: Optional[str] = None, adult: bool = False) -> dict:
     """Переименовывает ПОДТВЕРЖДЁННЫЙ пользователем оффер: дописывает id в название.
 
     offer_id — id, который пользователь выбрал/подтвердил в UI (после create).
     Имя собирается из плана ленда (product/bracket/type/lang) + этого id.
     """
-    plan = prepare_plan(sid, lid, site_type=site_type)
+    plan = prepare_plan(sid, lid, site_type=site_type, adult=adult)
     bracket = plan["bracket"]
     final_name = build_offer_name(plan["product"], bracket,
                                   plan["site_type"], plan["lang"],
-                                  offer_id=offer_id)
+                                  offer_id=offer_id, adult=adult)
     from connectors.keitaro import client_from_env
     with client_from_env() as kt:
         # Передаём страну — чтобы при сохранении модалка не сбросила её в

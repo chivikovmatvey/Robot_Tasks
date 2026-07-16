@@ -113,13 +113,17 @@ def replace_in_file_attrs(raw_html: str, find_str: str, replace_str: str) -> tup
         def _replacer(m, _f=find_str, _r=replace_str):
             nonlocal count
             val = m.group(2)
-            # Если атрибут содержит путь перед именем файла (img/prod3.png)
-            # — заменяем весь путь целиком, не только имя
-            slash_idx = val.rfind('/')
-            if slash_idx != -1 and val[slash_idx + 1:] == _f:
-                new_val = _r  # "img/prod3.png" → "Prostamexill.png"
-            else:
-                new_val = val.replace(_f, _r)
+            # Заменяем СЕГМЕНТ имени файла целиком (вместе с префиксом до
+            # границы пути) — идемпотентно: повторная адаптация поверх уже
+            # адаптированного текста (VSL/работа поверх output) не должна
+            # наслаивать префиксы (кейс neuro_x → neuro_neuro_x при простом
+            # val.replace). Границы сегмента: / , пробел, ?, #.
+            seg = re.compile(r'[^\s,/?#]*' + re.escape(_f) + r'[^\s,?#]*')
+            # 1) отбрасываем каталоги перед сегментом с _f — новый файл в корне
+            #    ("img/prod3.png" → "prod3.png"; работает и внутри srcset)
+            tmp = re.sub(r'[^\s,]*/(?=[^\s,/?#]*' + re.escape(_f) + r')', '', val)
+            # 2) сегмент имени (с любыми префиксами/суффиксами до ?#) → _r
+            new_val = seg.sub(_r, tmp)
             count += 1
             return m.group(1) + new_val + m.group(3)
 

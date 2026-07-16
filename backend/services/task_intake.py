@@ -28,6 +28,10 @@ log = logging.getLogger("intake")
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 
+# Задачи в этих статусах закрыты навсегда — в списке не показываем.
+TERMINAL_STATUSES = {"DONE", "CLOSED", "CANCELLED", "CANCELED",
+                     "REJECTED", "ARCHIVED"}
+
 # Поля карточки в человекочитаемом виде (для Telegram).
 FIELD_ORDER = [
     ("Created by", "👤 От кого"),
@@ -135,10 +139,11 @@ class TaskIntake:
             s.strip().upper() for s in pool_status.split(",") if s.strip()
         ] or ["PENDING"]
         self.include_anyone = include_anyone
-        self.exclude_statuses = {
-            s.upper() for s in (exclude_statuses or
-                                {"DONE", "CLOSED", "CANCELLED", "CANCELED",
-                                 "REJECTED", "ARCHIVED"})
+        # Терминальные статусы исключаются ВСЕГДА; ADROBOT_EXCLUDE_STATUSES
+        # только ДОБАВЛЯЕТ к ним (иначе env-список затирал дефолт и
+        # отменённые задачи возвращались в выдачу).
+        self.exclude_statuses = TERMINAL_STATUSES | {
+            s.upper() for s in (exclude_statuses or set())
         }
         self.state_file = state_file or (BASE_DIR / "storage" / "tasks_state.json")
         self.seen: set[str] = self._load_state()
@@ -226,15 +231,16 @@ class TaskIntake:
                         status="ANY", assigned_to="ANY", assigned_any_of=[self.me]
                     )
                 for t in mine:
-                    if t.status.upper() in self.exclude_statuses:
-                        continue
                     merged[t.uid] = t
             except AuthError:
                 raise
             except Exception:  # noqa: BLE001
                 log.exception("Не удалось получить личные задачи (%s)", self.me)
 
-        tasks = list(merged.values())
+        # Финальный фильтр по ВСЕМУ списку (пул + личные): закрытые/отменённые
+        # задачи в UI не нужны.
+        tasks = [t for t in merged.values()
+                 if self._norm_status(t.status) not in self.exclude_statuses]
         with self._lock:
             self._cache = tasks
         return tasks
@@ -376,10 +382,15 @@ class TaskIntake:
         return (s or "").strip().upper().replace(" ", "_")
 
     def _my_tasks(self) -> list[TaskSummary]:
-        """Мои задачи всех статусов (в порядке сайта — свежие сверху)."""
-        if self.my_id:
-            return self.client.list_tasks(status="ANY", assigned_to=self.my_id)
-        return self.client.list_tasks(status="ANY", assigned_text=self.me)
+        """Задачи для сводки: мои + пул Anyone (в порядке сайта — свежие сверху).
+
+        Без пула Anyone новые PENDING-задачи (они назначены на Anyone, пока их
+        никто не принял) не попадали в список бота."""
+        needles = [self.me]
+        if self.include_anyone:
+            needles.append("anyone")
+        return self.client.list_tasks(status="ANY", assigned_to="ANY",
+                                      assigned_any_of=needles)
 
     def send_tasks_summary(self) -> None:
         """Последние 5 задач коротко + статистика статусов по последним 30."""
@@ -396,9 +407,10 @@ class TaskIntake:
         if last30:
             c = Counter(self._norm_status(t.status) for t in last30)
             rev, acc, inp = c.get("REVIEW", 0), c.get("ACCEPTED", 0), c.get("IN_PROCESS", 0)
-            stat = (f"📊 Из последних {len(last30)}: 🔎 на ревью: {rev} · "
-                    f"✅ принято: {acc} · 🔄 в процессе: {inp}")
-            other = len(last30) - rev - acc - inp
+            pend = c.get("PENDING", 0)
+            stat = (f"📊 Из последних {len(last30)}: ⏳ pending: {pend} · "
+                    f"🔎 на ревью: {rev} · ✅ принято: {acc} · 🔄 в процессе: {inp}")
+            other = len(last30) - rev - acc - inp - pend
             if other:
                 stat += f" · ▫️ прочее: {other}"
             lines += ["", stat]

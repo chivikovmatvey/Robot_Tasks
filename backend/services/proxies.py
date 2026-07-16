@@ -130,12 +130,25 @@ class ProxyStore:
             self._items = [it for it in self._items if it["id"] != proxy_id]
             self._save()
 
-    def get_parsed(self, proxy_id: str) -> Optional[dict]:
-        """Playwright-proxy сохранённого прокси по id."""
+    def get_raw(self, proxy_id: str) -> Optional[str]:
+        """Raw-строка сохранённого прокси по id или label (без регистра)."""
+        needle = (proxy_id or "").strip().lower()
+        if not needle:
+            return None
         for it in self._items:
-            if it["id"] == proxy_id:
-                return parse_proxy(it.get("raw", ""))
+            if it["id"] == proxy_id or it.get("label", "").strip().lower() == needle:
+                return it.get("raw")
         return None
+
+    def list_raw(self) -> list[tuple[str, str]]:
+        """[(label|id, raw), ...] всех сохранённых прокси."""
+        return [(it.get("label") or it["id"], it["raw"])
+                for it in self._items if it.get("raw")]
+
+    def get_parsed(self, proxy_id: str) -> Optional[dict]:
+        """Playwright-proxy сохранённого прокси по id или label (без регистра)."""
+        raw = self.get_raw(proxy_id)
+        return parse_proxy(raw) if raw else None
 
 
 _store: Optional[ProxyStore] = None

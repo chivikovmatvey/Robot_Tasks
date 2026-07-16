@@ -69,8 +69,9 @@ export function TaskDetailsModal({ tasks, onClose }: { tasks: TaskRefLite[]; onC
           </div>
         )}
 
-        {/* содержимое */}
-        <div style={{ padding: '1rem', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.9rem' }}>
+        {/* содержимое: flex:1 + minHeight:0 обязательны — иначе flex-родитель с
+            overflow:hidden обрезает блок и прокрутка не работает */}
+        <div style={{ flex: 1, minHeight: 0, padding: '1rem', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.9rem' }}>
           {loading && <p className="dim small" style={{ margin: 0 }}>Загружаю карточку…</p>}
           {err && <div style={{ padding: '0.5rem 0.8rem', background: 'rgba(239,68,68,0.12)', color: '#f87171', borderRadius: 8, fontSize: 12 }}>{err}</div>}
 
@@ -90,7 +91,7 @@ export function TaskDetailsModal({ tasks, onClose }: { tasks: TaskRefLite[]; onC
                       {fields.map(([k, label]) => (
                         <Fragment key={k}>
                           <div className="dim small" style={{ whiteSpace: 'nowrap' }}>{label}</div>
-                          <div style={{ fontSize: 13, whiteSpace: 'pre-line' }}>{detail.fields[k]}</div>
+                          <div style={{ fontSize: 13, whiteSpace: 'pre-line', wordBreak: 'break-word', minWidth: 0 }}>{detail.fields[k]}</div>
                         </Fragment>
                       ))}
                     </div>

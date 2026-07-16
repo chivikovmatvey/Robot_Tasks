@@ -1,0 +1,416 @@
+{
+ "vertical": "HYPERTENSION",
+ "sets": [
+  {
+   "offer_id": 20725,
+   "offer_name": "20725 Procard Max Potency Low [HYPERTENSION-MX] [vsl es ] ReactJS v5",
+   "geo": "MX",
+   "lang": "es",
+   "comments": [
+    {
+     "index": 0,
+     "name": "Laura Hernández",
+     "text": "¡Muy genial para mi hipertensión, lo voy a probar!",
+     "likes": 85,
+     "avatar": "avatars/11.jpeg",
+     "appearAtPercent": 5,
+     "replies": []
+    },
+    {
+     "index": 1,
+     "name": "Patricia Morales",
+     "text": "Me pareció el video muy corto, esperaba más información sobre la presión arterial, pero me gustó y voy a empezar a hacer todo lo que enseña.",
+     "likes": 79,
+     "avatar": "avatars/12.jpeg",
+     "appearAtPercent": 12,
+     "replies": []
+    },
+    {
+     "index": 2,
+     "name": "Luis Ramírez",
+     "text": "Todos los que sufren de presión alta deberían ver esto, lo que revela es increíble, ¡nunca pensé que esto pudiera ser posible!",
+     "likes": 81,
+     "avatar": "avatars/3.jpeg",
+     "appearAtPercent": 19,
+     "replies": []
+    },
+    {
+     "index": 3,
+     "name": "Alejandro García",
+     "text": "¡Amén! ¡Que Dios bendiga por esta solución para la hipertensión!",
+     "likes": 66,
+     "avatar": "avatars/4.jpeg",
+     "appearAtPercent": 26,
+     "replies": []
+    },
+    {
+     "index": 4,
+     "name": "Carmen López",
+     "text": "Que Dios bendiga a este hombre por habernos ayudado con la presión alta",
+     "likes": 50,
+     "avatar": "avatars/13.jpeg",
+     "appearAtPercent": 33,
+     "replies": []
+    },
+    {
+     "index": 5,
+     "name": "Rosa Martínez",
+     "text": "Ojalá funcione para mi presión arterial, ¡he probado tantas cosas! Pero esto tiene todo el sentido",
+     "likes": 47,
+     "avatar": "avatars/14.jpeg",
+     "appearAtPercent": 40,
+     "replies": [
+      {
+       "index": 0,
+       "name": "Miguel Martínez",
+       "text": "¡Sensacional @Rosa! Empiezo hoy con mi esposa... ambos tenemos hipertensión",
+       "avatar": "avatars/7.jpeg",
+       "likes": 41,
+       "appearAtPercent": 47
+      }
+     ]
+    },
+    {
+     "index": 6,
+     "name": "Carlos Sánchez",
+     "text": "Nunca había oído algo así para la presión arterial, me parecía raro pero tiene mucho sentido... ¡ya empecé a probarlo y está funcionando desde los primeros días!",
+     "likes": 40,
+     "avatar": "avatars/2.jpeg",
+     "appearAtPercent": 50,
+     "replies": []
+    },
+    {
+     "index": 7,
+     "name": "Ana Jiménez",
+     "text": "¿De verdad funciona para la presión alta?",
+     "likes": 18,
+     "avatar": "avatars/9.jpeg",
+     "appearAtPercent": 58,
+     "replies": [
+      {
+       "index": 0,
+       "name": "Rosa Martínez",
+       "text": "Sí @Ana, funciona de verdad, soy la prueba viviente... Mi presión estaba en 160/100... gracias a este video la estabilicé. Toda mi familia está emocionada, estamos tratando de agradecer a esta magnífica persona que nos ayudó. Comparto este video todos los días",
+       "avatar": "avatars/15.jpeg",
+       "likes": 22,
+       "appearAtPercent": 62
+      }
+     ]
+    },
+    {
+     "index": 8,
+     "name": "Juan Jiménez",
+     "text": "La solución para la presión alta siempre estuvo ahí... pero nadie la vio, ¡muchas gracias, has traído luz y esperanza!",
+     "likes": 17,
+     "avatar": "avatars/5.jpeg",
+     "appearAtPercent": 68,
+     "replies": []
+    },
+    {
+     "index": 9,
+     "name": "Ana Jiménez",
+     "text": "No me gustó la edición del video... ¡pero lo entiendo perfectamente! Creo en todo lo que dice sobre la hipertensión",
+     "likes": 15,
+     "avatar": "avatars/10.jpeg",
+     "appearAtPercent": 75,
+     "replies": []
+    },
+    {
+     "index": 10,
+     "name": "María Fernández",
+     "text": "Voy a enviar este video a otras personas, conozco gente con hipertensión crónica a quienes este video puede ayudar a mejorar su calidad de vida.",
+     "likes": 11,
+     "avatar": "avatars/9.jpeg",
+     "appearAtPercent": 82,
+     "replies": []
+    },
+    {
+     "index": 11,
+     "name": "Julio Mendoza",
+     "text": "En cuanto empecé a ver este video ya me dio una nueva forma de ver el problema de la presión alta",
+     "likes": 9,
+     "avatar": "avatars/8.jpeg",
+     "appearAtPercent": 89,
+     "replies": []
+    },
+    {
+     "index": 12,
+     "name": "Mario Torres",
+     "text": "Esto es un poco controvertido, pero creo que vale la pena verlo para formarse una opinión sobre la hipertensión...",
+     "likes": 8,
+     "avatar": "avatars/1.jpeg",
+     "appearAtPercent": 95,
+     "replies": []
+    }
+   ]
+  },
+  {
+   "offer_id": 19277,
+   "offer_name": "19277 Cardiox [HYPERTENSION-PE] [vsl es adult] ReactJs v5",
+   "geo": "PE",
+   "lang": "es",
+   "comments": [
+    {
+     "index": 0,
+     "name": "María José",
+     "text": "A mis 48 años, este suplemento cambió mi vida. En dos semanas mis problemas de presión se estabilizaron, y un año después sigo sin esos mareos ni fatiga. ¡Es un alivio poder disfrutar de mis nietos sin preocupaciones!",
+     "likes": 170,
+     "avatar": "avatars/9.jpeg",
+     "appearAtPercent": 5,
+     "replies": []
+    },
+    {
+     "index": 1,
+     "name": "Antonio",
+     "text": "Hola, probé este suplemento, pero en dos semanas solo logré una ligera mejoría en mis picos de presión. A mis 50 años, esperaba más, pero seguiré usándolo a ver si mejora con el tiempo.",
+     "likes": 85,
+     "avatar": "avatars/5.jpeg",
+     "appearAtPercent": 12,
+     "replies": []
+    },
+    {
+     "index": 2,
+     "name": "Isabel",
+     "text": "Llevo solo 5 días tomándolo, así que no puedo hablar de efectos a largo plazo. Pero, a mis 45 años, los dolores de cabeza que me daban por la presión alta han disminuido mucho en solo 3 días. ¡Es sorprendente! Espero seguir así.",
+     "likes": 90,
+     "avatar": "avatars/10.jpeg",
+     "appearAtPercent": 19,
+     "replies": []
+    },
+    {
+     "index": 3,
+     "name": "Javier",
+     "text": "Amigos, probé este suplemento y los resultados son reales. No suelo confiar en estas cosas, pero a mis 47 años mi presión está mucho más controlada. Ya no tengo esos mareos que me hacían parar en medio del día.",
+     "likes": 85,
+     "avatar": "avatars/3.jpeg",
+     "appearAtPercent": 26,
+     "replies": []
+    },
+    {
+     "index": 4,
+     "name": "Carmen",
+     "text": "A mis 42 años, decidí probar este suplemento y compartiré mis resultados. Siempre he lidiado con dolores de cabeza y fatiga por la presión alta, y en el trabajo pensaban que solo estaba estresada. Quiero una vida más activa, cuidar de mi familia sin sentirme agotada. ¡Espero que esto me ayude a sentirme mejor!",
+     "likes": 80,
+     "avatar": "avatars/13.jpeg",
+     "appearAtPercent": 33,
+     "replies": []
+    },
+    {
+     "index": 5,
+     "name": "Roberto Mendoza",
+     "text": "A los 52 años mi presión era un desastre. Después de tres semanas con Cardiox noté que ya no me sube tan fuerte por las mañanas. Mi esposa dice que estoy de mejor humor.",
+     "likes": 76,
+     "avatar": "avatars/2.jpeg",
+     "appearAtPercent": 40,
+     "replies": []
+    },
+    {
+     "index": 6,
+     "name": "Lucía Vargas",
+     "text": "Tenía palpitaciones casi todos los días. El video me convenció de probarlo y, a mis 49 años, siento el corazón más tranquilo. No es magia, pero sí se nota.",
+     "likes": 68,
+     "avatar": "avatars/14.jpeg",
+     "appearAtPercent": 47,
+     "replies": []
+    },
+    {
+     "index": 7,
+     "name": "Fernando Ríos",
+     "text": "Soy bastante escéptico con los suplementos, pero mi hermano me pasó el enlace. En un mes la presión bajó lo suficiente para que el médico me felicitara en el control.",
+     "likes": 62,
+     "avatar": "avatars/4.jpeg",
+     "appearAtPercent": 54,
+     "replies": []
+    },
+    {
+     "index": 8,
+     "name": "Patricia Salazar",
+     "text": "Lo recomendé a mi hermana porque ambas sufrimos de presión alta. Ella empezó hace dos semanas y ya duerme mejor. Yo llevo más tiempo y los mareos casi desaparecieron.",
+     "likes": 58,
+     "avatar": "avatars/11.jpeg",
+     "appearAtPercent": 61,
+     "replies": []
+    },
+    {
+     "index": 9,
+     "name": "Diego Herrera",
+     "text": "Trabajo turnos largos y la presión se me disparaba. Con esto y un poco de cuidado en la comida, volví a sentirme estable. A mis 46 años eso vale oro.",
+     "likes": 55,
+     "avatar": "avatars/7.jpeg",
+     "appearAtPercent": 68,
+     "replies": []
+    },
+    {
+     "index": 10,
+     "name": "Elena Morales",
+     "text": "Los dolores de cabeza por la tensión eran insoportables. En diez días noté cambio. No digo que cure todo, pero para mí fue un gran alivio.",
+     "likes": 51,
+     "avatar": "avatars/15.jpeg",
+     "appearAtPercent": 75,
+     "replies": []
+    },
+    {
+     "index": 11,
+     "name": "Ricardo Paredes",
+     "text": "Mi madre de 58 años lo usa y está contenta. Yo también lo probé: menos fatiga al subir escaleras y presión más pareja en el tensiómetro de casa.",
+     "likes": 47,
+     "avatar": "avatars/8.jpeg",
+     "appearAtPercent": 82,
+     "replies": []
+    },
+    {
+     "index": 12,
+     "name": "Sofía Campos",
+     "text": "El video es largo pero explica bien por qué la presión se descontrola. Pedí Cardiox y el envío llegó rápido. Esperando ver más resultados en el segundo mes.",
+     "likes": 44,
+     "avatar": "avatars/12.jpeg",
+     "appearAtPercent": 90,
+     "replies": []
+    }
+   ]
+  },
+  {
+   "offer_id": 19214,
+   "offer_name": "19214 Cardionix [HYPERTENSION-MX] [vsl es ] ReactJS v5",
+   "geo": "MX",
+   "lang": "es",
+   "comments": [
+    {
+     "index": 0,
+     "name": "Laura Bianchi",
+     "text": "Molto geniale per le mie articolazioni, lo proverò!",
+     "likes": 85,
+     "avatar": "avatars/11.jpeg",
+     "appearAtPercent": 5,
+     "replies": []
+    },
+    {
+     "index": 1,
+     "name": "Patrizia Romano",
+     "text": "Ho trovato il video molto corto, spero avesse più cose sulle articolazioni, ma mi è piaciuto e inizierò a fare tutto quello che insegna.",
+     "likes": 79,
+     "avatar": "avatars/12.jpeg",
+     "appearAtPercent": 12,
+     "replies": []
+    },
+    {
+     "index": 2,
+     "name": "Luigi Bianchi",
+     "text": "Tutti coloro che soffrono di dolore articolare dovrebbero vedere questo, quello che rivela è incredibile, non ho mai pensato che questo potesse succedere!",
+     "likes": 81,
+     "avatar": "avatars/3.jpeg",
+     "appearAtPercent": 19,
+     "replies": []
+    },
+    {
+     "index": 3,
+     "name": "Alessandro Romano",
+     "text": "Amen! Dio benedica per questa soluzione per le articolazioni!",
+     "likes": 66,
+     "avatar": "avatars/4.jpeg",
+     "appearAtPercent": 26,
+     "replies": []
+    },
+    {
+     "index": 4,
+     "name": "Carmen Rossi",
+     "text": "Dio benedica quest'uomo per averci aiutato con il dolore articolare",
+     "likes": 50,
+     "avatar": "avatars/13.jpeg",
+     "appearAtPercent": 33,
+     "replies": []
+    },
+    {
+     "index": 5,
+     "name": "Rosa Ferrari",
+     "text": "Spero davvero che funzioni per le mie articolazioni, ho provato tante cose! Ma questo ha perfettamente senso",
+     "likes": 47,
+     "avatar": "avatars/14.jpeg",
+     "appearAtPercent": 40,
+     "replies": [
+      {
+       "index": 0,
+       "name": "Michele Ferrari",
+       "text": "Sensazionale @Susan! Inizio oggi con mio marito... entrambi abbiamo l'artrite",
+       "avatar": "avatars/7.jpeg",
+       "likes": 41,
+       "appearAtPercent": 47
+      }
+     ]
+    },
+    {
+     "index": 6,
+     "name": "Carlo Rossi",
+     "text": "Non avevo mai sentito parlare di questo per le articolazioni, sembrava strano ma ha molto senso... ho già iniziato a provarlo, e sta funzionando nei primi giorni!",
+     "likes": 40,
+     "avatar": "avatars/2.jpeg",
+     "appearAtPercent": 50,
+     "replies": []
+    },
+    {
+     "index": 7,
+     "name": "Anna Martini",
+     "text": "Funziona davvero per il dolore articolare?",
+     "likes": 18,
+     "avatar": "avatars/9.jpeg",
+     "appearAtPercent": 58,
+     "replies": [
+      {
+       "index": 0,
+       "name": "Rosa Ferrari",
+       "text": "Sì @Anna, funziona davvero, sono la prova vivente... Stavo per perdere la mobilità delle mie ginocchia... grazie a questo video, le ho salvate. Tutta la mia famiglia è emozionata, stiamo cercando di ricambiare questa magnifica persona che ci ha aiutato. Condivido questo video tutti i giorni",
+       "avatar": "avatars/15.jpeg",
+       "likes": 22,
+       "appearAtPercent": 62
+      }
+     ]
+    },
+    {
+     "index": 8,
+     "name": "Giovanni Martini",
+     "text": "La soluzione per il dolore articolare è sempre stata lì... ma nessuno l'ha vista, grazie mille, hai portato luce e speranza!",
+     "likes": 17,
+     "avatar": "avatars/5.jpeg",
+     "appearAtPercent": 68,
+     "replies": []
+    },
+    {
+     "index": 9,
+     "name": "Anna Martini",
+     "text": "Non mi è piaciuta l'edizione del video... ma lo capisco perfettamente! Credo in tutto quello che dice sulle articolazioni",
+     "likes": 15,
+     "avatar": "avatars/10.jpeg",
+     "appearAtPercent": 75,
+     "replies": []
+    },
+    {
+     "index": 10,
+     "name": "Maria Bianchi",
+     "text": "Invierò questo video ad altre persone, conosco persone con dolore articolare cronico a cui questo video può aiutarle a migliorare la loro qualità di vita.",
+     "likes": 11,
+     "avatar": "avatars/9.jpeg",
+     "appearAtPercent": 82,
+     "replies": []
+    },
+    {
+     "index": 11,
+     "name": "Giulio Mandera",
+     "text": "Appena ho iniziato a guardare questo video mi ha già dato un nuovo modo di pensare al dolore alle articolazioni",
+     "likes": 9,
+     "avatar": "avatars/8.jpeg",
+     "appearAtPercent": 89,
+     "replies": []
+    },
+    {
+     "index": 12,
+     "name": "Mario Rossi",
+     "text": "Questo è un po' controverso, ma penso che valga la pena vederlo per formarsi un'opinione sul dolore articolare...",
+     "likes": 8,
+     "avatar": "avatars/1.jpeg",
+     "appearAtPercent": 95,
+     "replies": []
+    }
+   ]
+  }
+ ]
+}

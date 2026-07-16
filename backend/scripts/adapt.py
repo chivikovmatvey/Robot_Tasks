@@ -35,7 +35,9 @@ else:
     R=G=Y=B=C=DIM=RESET=BOLD=""
 
 # PHP файлы обрабатываем — но PHP блоки внутри защищены
-TEXT_EXT  = {'.php', '.html', '.htm', '.css', '.js', '.txt', '.json', '.xml'}
+# .blink — CSS из сохранённых Chrome-ом страниц (mhtml), обрабатывается как css
+TEXT_EXT  = {'.php', '.html', '.htm', '.css', '.js', '.txt', '.json', '.xml',
+             '.blink'}
 SKIP_EXT  = {'.backup', '.bak', '.orig'}  # эти файлы не копируем в output
 IMAGE_EXT = {'.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg'}
 
@@ -369,7 +371,7 @@ def process_offer(src_root: Path, dst_root: Path, config: dict, verbose: bool,
             if ext in {'.html', '.htm', '.php'}:
                 from scripts.parser_v2 import apply_dom_replacements
                 text, n = apply_dom_replacements(text, rules, image_map)
-            elif ext == '.css':
+            elif ext in {'.css', '.blink'}:
                 # В CSS нет цен и текста продукта — слепые замены ломали вёрстку
                 # (цена «50» превращала translate(-50%,-50%) в translate(-229%,-229%)).
                 # Меняем только пути/имена картинок (background: url(...)).
@@ -411,7 +413,7 @@ def process_offer(src_root: Path, dst_root: Path, config: dict, verbose: bool,
     stats['htmlized'] = htmlized
 
     # Обвязка под наше API: гарантируем эталонный api.php в корне ленда.
-    stats['api_php'] = ensure_api_php(dst_root, verbose)
+    stats['api_php'] = ensure_api_php(dst_root, verbose, geo_id=geo_id)
 
     return stats
 
@@ -465,24 +467,43 @@ sendOrder($dimensionName, $thxPage, $_POST);
 """
 
 
-def ensure_api_php(root: Path, verbose: bool = False) -> int:
+def ensure_api_php(root: Path, verbose: bool = False, geo_id: str = '') -> int:
     """Кладёт эталонный api.php рядом с КАЖДОЙ точкой входа index.php.
 
     api.php — обязательный приёмник формы (раздел 5.1 AGENT.md), содержимое
     фиксированное. Перезаписываем любой существующий (чужой/донорский) эталоном.
     Если index.php в архиве нет — кладём в корень. Возвращает число записей.
+
+    geo_id — целевое гео: дефолты $country/$language «Спасибо»-страницы
+    подставляются под него (иначе остаются шаблонные ES/MX донора-эталона).
     """
+    api_txt = API_PHP_TEMPLATE
+    geo_id = (geo_id or '').strip().upper()
+    if geo_id:
+        try:
+            from scripts.scanner import load_geos
+        except ImportError:
+            from scanner import load_geos
+        lang = ((load_geos().get(geo_id) or {}).get('lang') or '').upper()
+        api_txt = re.sub(
+            r"(\$country\s*=\s*isset\(\$_POST\['country'\]\)[^:]*:\s*')[^']*(')",
+            rf"\g<1>{geo_id}\g<2>", api_txt)
+        if lang:
+            api_txt = re.sub(
+                r"(\$language\s*=\s*isset\(\$_POST\['language'\]\)[^:]*:\s*')[^']*(')",
+                rf"\g<1>{lang}\g<2>", api_txt)
+
     targets = {p.parent for p in root.rglob('index.php')}
     if not targets:
         targets = {root}
     written = 0
     for d in targets:
         d.mkdir(parents=True, exist_ok=True)
-        (d / 'api.php').write_text(API_PHP_TEMPLATE, encoding='utf-8')
+        (d / 'api.php').write_text(api_txt, encoding='utf-8')
         written += 1
         if verbose:
             rel = (d / 'api.php').relative_to(root)
-            ok(f"API   {rel}  (эталонный api.php)")
+            ok(f"API   {rel}  (эталонный api.php{', гео ' + geo_id if geo_id else ''})")
     return written
 
 

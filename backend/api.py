@@ -453,6 +453,7 @@ def _resolve_zip_path(raw: str, base_dir: str, names: set[str]) -> str | None:
 
 _MIME_BY_EXT = {
     '.css':  'text/css; charset=utf-8',
+    '.blink': 'text/css; charset=utf-8',  # CSS из Chrome-mhtml сохранёнок
     '.js':   'application/javascript; charset=utf-8',
     '.json': 'application/json; charset=utf-8',
     '.png':  'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
@@ -522,7 +523,9 @@ def preview_get_file(filename: str, path: str = Query(...), raw: int = Query(0))
         data = zf.read(real)
 
     ext = Path(real).suffix.lower()
-    text_exts = {'.php', '.html', '.htm', '.css', '.js', '.json', '.txt', '.xml'}
+    # .blink — CSS из сохранённых Chrome-ом страниц (mhtml), отдаём как css
+    text_exts = {'.php', '.html', '.htm', '.css', '.js', '.json', '.txt', '.xml',
+                 '.blink'}
 
     # Панель кода — всегда plain text
     if raw and ext in text_exts:
@@ -530,7 +533,7 @@ def preview_get_file(filename: str, path: str = Query(...), raw: int = Query(0))
                         media_type='text/plain; charset=utf-8')
 
     # CSS для превью: правильный MIME + переписываем url(...) (фоны, шрифты)
-    if ext == '.css':
+    if ext in ('.css', '.blink'):
         css = data.decode('utf-8', errors='replace')
         css_dir = posixpath.dirname(real)
         base = f"/api/preview/{urllib.parse.quote(filename)}/file?path="
@@ -579,12 +582,14 @@ def preview_save_file(filename: str, body: PreviewSaveBody):
 
     fd, tmp_path = tempfile.mkstemp(suffix='.zip', dir=str(target.parent))
     os.close(fd)
+    old_bytes: bytes | None = None
     try:
         replaced = False
         with zipfile.ZipFile(target, 'r') as zin, \
              zipfile.ZipFile(tmp_path, 'w', zipfile.ZIP_DEFLATED) as zout:
             for item in zin.infolist():
                 if item.filename == body.path:
+                    old_bytes = zin.read(item.filename)
                     zout.writestr(item.filename, new_bytes)
                     replaced = True
                 else:
@@ -598,6 +603,18 @@ def preview_save_file(filename: str, body: PreviewSaveBody):
     except Exception as e:
         Path(tmp_path).unlink(missing_ok=True)
         raise HTTPException(500, f"Save failed: {e}")
+
+    # Правка output-архива ленда → в журнал пост-правок (переживёт переадаптацию).
+    try:
+        from services.session import get_manager
+        mgr = get_manager()
+        hit = mgr.find_lander_by_output(target.name)
+        if hit and old_bytes is not None:
+            mgr.record_output_file_edit(
+                *hit, body.path,
+                old_bytes.decode('utf-8', errors='replace'), body.content)
+    except Exception:  # noqa: BLE001 — журнал не должен ломать сохранение
+        logging.getLogger("api").exception("Журнал правок: сбой записи")
 
     return {"success": True, "path": body.path, "size": len(new_bytes)}
 

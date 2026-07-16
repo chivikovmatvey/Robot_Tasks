@@ -25,6 +25,17 @@ from utils import runners
 
 log = logging.getLogger("session")
 
+# Ключи adapt_params со статусом заливки/публикации ленда (Keitaro-оффер,
+# тестовая кампания, вариант/ревью в AdRobot, имя VSL-видеоархива).
+# ПЕРЕЖИВАЮТ повторную адаптацию и переустановку — по ним видно, заливался
+# ли ленд; затираются только у дубля (копия НЕ заливалась).
+PUBLISH_KEYS = (
+    "keitaro_offer_id", "keitaro_name",
+    "campaign_url", "campaign_name",
+    "variant_added", "variant_task_uid", "variants_moved", "review_submitted",
+    "vsl_archive_name",
+)
+
 BASE_DIR = Path(__file__).resolve().parents[1]
 SESSIONS_DIR = BASE_DIR / "storage" / "sessions"
 
@@ -35,10 +46,12 @@ ARCHIVE_TTL_SECONDS = 24 * 60 * 60
 _VIDEO_EXT = {".mp4", ".webm", ".mov", ".ogg"}
 _MEDIA_EXT = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".avif"} | _VIDEO_EXT
 # Текстовые файлы, в которых ищем ссылки на медиа (определение «используется»).
-_USAGE_TEXT_EXT = {".html", ".htm", ".php", ".css", ".js", ".json"}
+_USAGE_TEXT_EXT = {".html", ".htm", ".php", ".css", ".js", ".json", ".blink"}
 
 # Текстовые файлы адаптированного ленда, доступные агенту для правок.
-_EDIT_TEXT_EXT = {".html", ".htm", ".php", ".css", ".js", ".json", ".txt", ".xml"}
+# .blink — CSS из сохранённых Chrome-ом страниц (mhtml), обрабатываем как css.
+_EDIT_TEXT_EXT = {".html", ".htm", ".php", ".css", ".js", ".json", ".txt", ".xml",
+                  ".blink"}
 
 
 # ── статусы ──────────────────────────────────────────────────────
@@ -53,7 +66,9 @@ class LanderStatus:
 
 
 # Модификаторы названия продукта, которые не являются самим продуктом.
-_PRODUCT_MODIFIERS = {"low", "resell", "misslead", "mislead", "pro", "plus", "2", "3"}
+# 'adult' — служебная пометка группы: она уходит в скобку [pl xx adult]
+# и не должна попадать ни в название оффера, ни в видимый текст ленда.
+_PRODUCT_MODIFIERS = {"low", "resell", "misslead", "mislead", "pro", "plus", "2", "3", "adult"}
 
 # Код вертикали в имени группы оффера → ПОЛНОЕ название для скобки Keitaro
 # [VERTICAL-GEO] (как в реальных офферах: [HYPERTENSION-CZ], [PROSTATITIS-CL-...]).
@@ -156,7 +171,8 @@ def parse_target_offer(offer: str, geos: Optional[dict] = None) -> dict:
         else:
             middle = tokens
         # ПОЛНЫЙ продукт (с модификаторами) — для названия оффера.
-        out["product"] = " ".join(middle)
+        # 'adult' вычищаем и отсюда: в названии он живёт в скобке, не в продукте.
+        out["product"] = " ".join(t for t in middle if t.lower() != "adult")
         # Ядро бренда — непрерывный префикс до первого модификатора (Resell/Low/…),
         # чтобы оставался подстрокой для фильтра грида Keitaro и адаптации.
         core: list[str] = []
@@ -207,6 +223,7 @@ def double_num(num: str) -> str:
 class LanderState:
     lander_id: str
     status: str = LanderStatus.QUEUED
+    display_name: Optional[str] = None  # пользовательское имя вкладки (переименование)
     task_uid: Optional[str] = None      # из какой задачи пришёл ленд (для проверки)
     task_title: Optional[str] = None
     offer_override: Optional[str] = None  # ручная подмена «группы»/оффера для этого ленда
@@ -250,6 +267,7 @@ class AdaptationSession:
     status: str = SessionStatus.PREPARING
     created_at: float = field(default_factory=time.time)
     archived_at: Optional[float] = None  # момент перемещения в архив (None = активна)
+    is_vsl: bool = False                 # VSL-сессия: работа через config.php шаблона
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -317,8 +335,14 @@ class SessionManager:
     def create_manual(self, lander_ids: list[str], offer: str,
                       task_uid: Optional[str] = None,
                       task_title: str = "", fields: Optional[dict] = None,
-                      task_url: str = "") -> AdaptationSession:
+                      task_url: str = "", is_vsl: bool = False) -> AdaptationSession:
         sid = uuid.uuid4().hex[:12]
+        # VSL-сессия всегда начинается с эталонного шаблона (19201) — на его
+        # основе делаются все VSL-ленды; доноры из задачи идут следом.
+        if is_vsl:
+            from services.vsl import VSL_TEMPLATE_ID
+            if VSL_TEMPLATE_ID not in lander_ids:
+                lander_ids = [VSL_TEMPLATE_ID, *lander_ids]
         landers = {
             lid: LanderState(lander_id=lid, task_uid=task_uid, task_title=task_title)
             for lid in lander_ids
@@ -338,6 +362,7 @@ class SessionManager:
             tasks=tasks,
             landers=landers,
             status=SessionStatus.PREPARING if lander_ids else SessionStatus.READY,
+            is_vsl=is_vsl,
         )
         with self._lock:
             self._sessions[sid] = s
@@ -355,14 +380,14 @@ class SessionManager:
         offer = fields.get("Offer", "") or ""
         return uid, title, offer, url, fields
 
-    def create_from_task(self, detail) -> AdaptationSession:
+    def create_from_task(self, detail, is_vsl: bool = False) -> AdaptationSession:
         """detail — TaskDetail (или dict с .fields/.title/.uid)."""
         uid, title, offer, url, fields = self._detail_parts(detail)
         # ID может не распарситься — это ок: создаём сессию пустой, ленды
         # пользователь добавит вручную или загрузит архивом.
         ids = extract_lander_ids(fields)
         return self.create_manual(ids, offer, task_uid=uid, task_title=title,
-                                  fields=fields, task_url=url)
+                                  fields=fields, task_url=url, is_vsl=is_vsl)
 
     def create_from_tasks(self, details: list) -> AdaptationSession:
         """Создаёт ОДНУ сессию из нескольких задач на один оффер.
@@ -462,6 +487,7 @@ class SessionManager:
                 "task_title": s.task_title,
                 "offer": s.offer,
                 "status": s.status,
+                "is_vsl": s.is_vsl,
                 "created_at": s.created_at,
                 "archived_at": s.archived_at,
                 "expires_at": (s.archived_at + ARCHIVE_TTL_SECONDS
@@ -580,6 +606,10 @@ class SessionManager:
                         self._save(s)
 
                         ls.scan = runners.run_scan_only(str(zip_path))
+                        # VSL: обычный скан слеп к PHP-конфигу — данные из $config.
+                        if s.is_vsl:
+                            from services.vsl import overlay_scan
+                            ls.scan = overlay_scan(ls.scan, zip_path)
                         ls.status = LanderStatus.READY
                         self._save(s)
                         log.info("Ленд %s готов (сессия %s)", lid, sid)
@@ -676,6 +706,9 @@ class SessionManager:
             ls.status = LanderStatus.SCANNING
             self._save(s)
             ls.scan = runners.run_scan_only(str(zip_path))
+            if s.is_vsl:
+                from services.vsl import overlay_scan
+                ls.scan = overlay_scan(ls.scan, zip_path)
             ls.status = LanderStatus.READY
         except Exception as e:  # noqa: BLE001
             ls.status = LanderStatus.ERROR
@@ -749,15 +782,104 @@ class SessionManager:
             Path(ls.zip_path).unlink(missing_ok=True)
         shutil.rmtree(self._history_dir(sid, lid), ignore_errors=True)
 
-        # свежее состояние с сохранением привязки к задаче
+        # свежее состояние с сохранением привязки к задаче; статус заливки
+        # (оффер/кампания/AdRobot) — исторический факт, тоже сохраняем
+        old_ap = ls.adapt_params or {}
+        publish = {k: old_ap[k] for k in PUBLISH_KEYS if k in old_ap}
         s.landers[lid] = LanderState(
             lander_id=lid, task_uid=ls.task_uid, task_title=ls.task_title,
-            offer_override=ls.offer_override)
+            offer_override=ls.offer_override,
+            adapt_params=publish or None)
         s.status = SessionStatus.PREPARING
         self._save(s)
         self.prepare_async(sid)
         log.info("Ленд %s переустанавливается (сессия %s): скачиваю первоначальный", lid, sid)
         return s
+
+    def rename_lander(self, sid: str, lid: str, name: str) -> LanderState:
+        """Пользовательское имя вкладки ленда (пусто = вернуть id)."""
+        s, ls = self._get_lander(sid, lid)
+        ls.display_name = (name or "").strip() or None
+        self._save(s)
+        return ls
+
+    def duplicate_lander(self, sid: str, lid: str) -> LanderState:
+        """Дубль ленда: копия исходного архива, output-архива, параметров,
+        медиа-замен (общие по задаче — уже общие) и журнала пост-правок.
+        Дубль встаёт в списке сразу ПОСЛЕ оригинала."""
+        import copy
+        import shutil
+        s, ls = self._get_lander(sid, lid)
+
+        base = f"{lid}-2"
+        new_lid, i = base, 2
+        while new_lid in s.landers:
+            i += 1
+            new_lid = f"{lid}-{i}"
+
+        sess_dir = self.dir / sid
+        sess_dir.mkdir(parents=True, exist_ok=True)
+
+        # исходный архив
+        new_zip_path = None
+        if ls.zip_path and Path(ls.zip_path).exists():
+            new_zip_path = sess_dir / f"{new_lid}.zip"
+            shutil.copy2(ls.zip_path, new_zip_path)
+
+        # адаптированный output
+        new_output_name = new_output_url = None
+        if ls.output_name:
+            from utils.files import output_relative_url
+            from utils.runners import STORAGE
+            src_out = STORAGE / "outputs" / ls.output_name
+            if src_out.exists():
+                new_output_name = f"{new_lid}__{ls.output_name}"
+                dst_out = STORAGE / "outputs" / new_output_name
+                shutil.copy2(src_out, dst_out)
+                new_output_url = output_relative_url(dst_out)
+
+        dup = LanderState(
+            lander_id=new_lid,
+            status=ls.status,
+            display_name=(ls.display_name or lid) + " (копия)",
+            task_uid=ls.task_uid,
+            task_title=ls.task_title,
+            offer_override=ls.offer_override,
+            zip_path=str(new_zip_path) if new_zip_path else None,
+            zip_name=new_zip_path.name if new_zip_path else None,
+            size=ls.size,
+            offer_name=ls.offer_name,
+            scan=copy.deepcopy(ls.scan),
+            output_name=new_output_name,
+            output_url=new_output_url,
+            # дубль НЕ заливался — статус заливки оригинала не наследуем,
+            # иначе копия выглядела бы «уже залитой»
+            adapt_params={k: v for k, v in copy.deepcopy(ls.adapt_params).items()
+                          if k not in PUBLISH_KEYS} if ls.adapt_params else None,
+            adapt_log=copy.deepcopy(ls.adapt_log),
+            error=ls.error,
+        )
+
+        # журнал пост-правок — чтобы правки дубля пережили его переадаптацию
+        jp = self._journal_path(sid, lid)
+        if jp.exists():
+            new_jp = self._journal_path(sid, new_lid)
+            new_jp.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(jp, new_jp)
+
+        # вставка сразу после оригинала (dict хранит порядок)
+        new_landers: dict[str, LanderState] = {}
+        for k, v in s.landers.items():
+            new_landers[k] = v
+            if k == lid:
+                new_landers[new_lid] = dup
+        s.landers = new_landers
+        self._save(s)
+
+        if new_output_name:
+            self._snapshot_output(sid, new_lid, "Дубль ленда")
+        log.info("Ленд %s продублирован как %s (сессия %s)", lid, new_lid, sid)
+        return dup
 
     def reorder_landers(self, sid: str, order: list[str]) -> AdaptationSession:
         """Переставляет ленды в сессии согласно списку id `order`.
@@ -814,6 +936,15 @@ class SessionManager:
         """
         s, ls = self._get_lander(sid, lid)
         geos = runners.load_geos()
+        # VSL: скан пересчитывается из ТЕКУЩЕГО config.php (рабочая копия) —
+        # обычный сканер PHP-конфиг не видит, а конфиг мог быть отредактирован.
+        # Заодно чинит ленды, отсканированные до появления VSL-скана.
+        if s.is_vsl:
+            from services.vsl import refresh_scan
+            try:
+                refresh_scan(sid, lid)
+            except Exception:  # noqa: BLE001
+                log.exception("VSL-скан %s/%s не пересчитался", sid, lid)
         # Оффер/поля берём из ЗАДАЧИ конкретного ленда (в объединённой сессии
         # у лендов могут быть разные задачи-источники с разной ценой).
         lander_offer = s.lander_offer(ls)
@@ -847,6 +978,9 @@ class SessionManager:
         if not donor_product or (ls.offer_name or "").startswith("(загружен)"):
             cands = scan.get("product_candidates", []) or []
             donor_product = scan.get("product") or (cands[0]["word"] if cands else "")
+        # VSL: продукт-донор = pageTitle конфига (название оффера-шаблона нерелевантно).
+        if s.is_vsl and scan.get("product"):
+            donor_product = scan["product"]
 
         # exclude_word: приоритет — вертикаль из группы (надёжно), иначе из scan.
         # ВАЖНО: хвостовой пробел значим (напр. 'hy ') — не обрезаем значение.
@@ -1017,16 +1151,23 @@ class SessionManager:
         """
         data, name = self.read_output_media(sid, lid, path)
         s, ls = self._get_lander(sid, lid)
-        repl_name = re.sub(r"[^\w.-]", "_", f"neuro_{name}") or "neuro_media"
+        # Повторная правка уже правленого файла: текущее имя в output —
+        # neuro_<исходное>. Префикс НЕ наслаиваем (иначе neuro_neuro_… и битые
+        # ссылки), ключ image_map — всегда имя из ИСХОДНОГО архива.
+        base = name
+        while base.startswith("neuro_"):
+            base = base[len("neuro_"):]
+        repl_name = re.sub(r"[^\w.-]", "_", f"neuro_{base}") or "neuro_media"
         d = self.replacement_dir(sid, lid, create=True)
         (d / repl_name).write_bytes(data)  # детерминированное имя — перезапись при повторной правке
         im = dict((ls.adapt_params or {}).get("image_map") or {})
-        im[name] = repl_name
+        im.pop(repl_name, None)  # каскадная запись от старой версии (neuro_x → neuro_neuro_x)
+        im[base] = repl_name
         ls.adapt_params = {**(ls.adapt_params or {}), "image_map": im}
         self._save(s)
         log.info("Нейро-правка %s закреплена как замена %s (ленд %s/%s)",
                  name, repl_name, sid, lid)
-        return {"image_map_key": name, "replacement": repl_name}
+        return {"image_map_key": base, "replacement": repl_name}
 
     def read_output_media(self, sid: str, lid: str, path: str) -> tuple[bytes, str]:
         """Байты картинки из output-архива + её имя. Для нейро-редактора."""
@@ -1206,10 +1347,18 @@ class SessionManager:
         }
 
     def adapt_lander(self, sid: str, lid: str, params: dict) -> dict:
-        """Выполняет run_adapt над скачанным лендом. Результат → storage/outputs."""
+        """Выполняет run_adapt над скачанным лендом. Результат → storage/outputs.
+
+        VSL-сессия: адаптируется РАБОЧАЯ КОПИЯ (с правками config.php), а не
+        исходник — иначе адаптация стирала бы конфиг. Повторная адаптация
+        применяется поверх предыдущей."""
         s, ls = self._get_lander(sid, lid)
         if not ls.zip_path or not Path(ls.zip_path).exists():
             raise ValueError(f"Ленд {lid} ещё не скачан (нет zip)")
+        src_zip = ls.zip_path
+        if getattr(s, "is_vsl", False):
+            from services.vsl import ensure_output
+            src_zip = str(ensure_output(sid, lid))
         if not params.get("geo_id"):
             raise ValueError("Не задан geo_id")
         if not params.get("product_new"):
@@ -1227,15 +1376,24 @@ class SessionManager:
         extra_dirs = [str(repl_dir)] if repl_dir.exists() else []
 
         try:
-            out_path, capture = runners.run_adapt(ls.zip_path, params,
-                                                  extra_asset_dirs=extra_dirs)
+            # VSL: clean удалил бы config.php (он в правилах «чужих файлов»),
+            # а inject-обвязка у эталонного шаблона уже своя — отключаем оба.
+            is_vsl = getattr(s, "is_vsl", False)
+            out_path, capture = runners.run_adapt(src_zip, params,
+                                                  extra_asset_dirs=extra_dirs,
+                                                  do_clean=not is_vsl,
+                                                  do_inject=not is_vsl)
         except Exception as e:  # noqa: BLE001
             ls.status = LanderStatus.ERROR
             ls.error = str(e)
             self._save(s)
             raise
 
-        ls.adapt_params = params
+        # Статус заливки (оффер/кампания/AdRobot) не сбрасываем — параметры
+        # формы не содержат этих ключей, а без них не понять, заливался ли ленд.
+        old_ap = ls.adapt_params or {}
+        ls.adapt_params = {
+            **{k: old_ap[k] for k in PUBLISH_KEYS if k in old_ap}, **params}
         ls.adapt_log = capture.to_dicts()
         if out_path:
             ls.output_name = Path(out_path).name
@@ -1245,6 +1403,42 @@ class SessionManager:
             ls.status = LanderStatus.ERROR
             ls.error = "run_adapt не вернул результат (см. лог)"
         self._save(s)
+
+        # VSL: продукт/цены/гео живут в config.php — текстовая адаптация их не
+        # видит, применяем значения прямо в конфиг + пересчитываем VSL-скан.
+        if out_path and is_vsl:
+            from services.vsl import adapt_config, refresh_scan
+            try:
+                notes = adapt_config(sid, lid, params)
+                ls.adapt_log = ls.adapt_log + [
+                    {"text": n, "level": "success"} for n in notes]
+            except Exception as e:  # noqa: BLE001
+                log.exception("VSL: не удалось адаптировать config.php %s/%s", sid, lid)
+                ls.adapt_log = ls.adapt_log + [
+                    {"text": f"VSL config: ошибка адаптации конфига: {e}",
+                     "level": "error"}]
+            try:
+                refresh_scan(sid, lid)
+            except Exception:  # noqa: BLE001
+                pass
+            self._save(s)
+
+        # Пост-правки (редактор/чат/перевод) — переприменяем к свежему архиву:
+        # адаптация пересобирает output из ИСХОДНИКА и без этого стирала бы их.
+        # VSL адаптируется поверх рабочей копии — правки уже внутри, replay
+        # был бы вторым применением.
+        if out_path and not is_vsl:
+            try:
+                notes = self.reapply_post_edits(sid, lid)
+                if notes:
+                    ls.adapt_log = ls.adapt_log + notes
+                    self._save(s)
+            except Exception as e:  # noqa: BLE001
+                log.exception("Не переприменились пост-правки %s/%s", sid, lid)
+                ls.adapt_log = ls.adapt_log + [
+                    {"text": f"Пост-правки не переприменились: {e}",
+                     "level": "error"}]
+                self._save(s)
 
         # Снимок версии после адаптации — для отката (см. _snapshot_output).
         if out_path:
@@ -1294,6 +1488,107 @@ class SessionManager:
                 raise KeyError(f"Файл не найден: {path}")
             return zf.read(member).decode("utf-8", errors="replace")
 
+    def replace_texts(self, sid: str, lid: str,
+                      pairs: list[tuple[str, str]]) -> list[dict]:
+        """Массовая замена find→replace по ВСЕМ текстовым файлам output-архива.
+
+        Одна атомарная пересборка zip и один снимок истории на весь батч
+        (edit_output_file на каждую пару делал бы N снимков). Для каждой пары
+        отчёт: сколько вхождений заменено и в каких файлах — «не найдено» тоже
+        результат (агент сообщит пользователю, что именно не совпало).
+        """
+        import os
+        import tempfile
+        import zipfile
+        target = self._output_zip(sid, lid)
+
+        with zipfile.ZipFile(target, "r") as zf:
+            texts: dict[str, str] = {}
+            for n in zf.namelist():
+                if Path(n).suffix.lower() in _EDIT_TEXT_EXT:
+                    texts[n] = zf.read(n).decode("utf-8", errors="replace")
+
+        report: list[dict] = []
+        changed: set[str] = set()
+        for find, replace in pairs:
+            if not find:
+                report.append({"find": "", "replaced": 0, "files": [],
+                               "error": "пустая строка поиска"})
+                continue
+            total = 0
+            files: list[str] = []
+            for name, text in texts.items():
+                k = text.count(find)
+                if k:
+                    texts[name] = text.replace(find, replace)
+                    total += k
+                    files.append(name)
+                    changed.add(name)
+            report.append({"find": find[:80], "replaced": total, "files": files})
+
+        if changed:
+            fd, tmp = tempfile.mkstemp(suffix=".zip", dir=str(target.parent))
+            os.close(fd)
+            try:
+                with zipfile.ZipFile(target, "r") as zin, \
+                     zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zout:
+                    for item in zin.infolist():
+                        if item.filename in changed:
+                            zout.writestr(item.filename,
+                                          texts[item.filename].encode("utf-8"))
+                        else:
+                            zout.writestr(item, zin.read(item.filename))
+                os.replace(tmp, target)
+            except Exception:
+                Path(tmp).unlink(missing_ok=True)
+                raise
+            self._snapshot_output(sid, lid, f"Замена текстов ({len(pairs)} пар)")
+            self.journal_append(sid, lid, {
+                "type": "replace_texts",
+                "pairs": [{"find": f, "replace": r} for f, r in pairs]})
+        return report
+
+    def write_output_file(self, sid: str, lid: str, path: str, data: bytes,
+                          *, label: str = "Правка файла",
+                          snapshot: bool = True) -> dict:
+        """Создаёт/заменяет файл path в output-архиве целиком (атомарно).
+
+        В отличие от edit_output_file пишет весь файл (нужно VSL-конфигу и
+        product.png). snapshot=False — без снимка версии (для серий правок,
+        снимок снимает последняя)."""
+        import os
+        import tempfile
+        import zipfile
+        norm = (path or "").replace("\\", "/").strip()
+        if not norm or norm.startswith("/") or ".." in norm.split("/"):
+            raise ValueError("Некорректный путь")
+        target = self._output_zip(sid, lid)
+
+        with zipfile.ZipFile(target, "r") as zf:
+            names = zf.namelist()
+            member = norm if norm in names else next(
+                (n for n in names if n.replace("\\", "/") == norm), None)
+
+        fd, tmp = tempfile.mkstemp(suffix=".zip", dir=str(target.parent))
+        os.close(fd)
+        try:
+            with zipfile.ZipFile(target, "r") as zin, \
+                 zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zout:
+                for item in zin.infolist():
+                    if member is not None and item.filename == member:
+                        zout.writestr(item.filename, data)
+                    else:
+                        zout.writestr(item, zin.read(item.filename))
+                if member is None:  # новый файл — добавляем в архив
+                    zout.writestr(norm, data)
+            os.replace(tmp, target)
+        except Exception:
+            Path(tmp).unlink(missing_ok=True)
+            raise
+        if snapshot:
+            self._snapshot_output(sid, lid, label)
+        return {"path": member or norm, "size": len(data)}
+
     def edit_output_file(self, sid: str, lid: str, path: str,
                          find: str, replace: str) -> dict:
         """Заменяет find→replace во всех вхождениях внутри файла output-архива.
@@ -1336,7 +1631,209 @@ class SessionManager:
             Path(tmp).unlink(missing_ok=True)
             raise
         self._snapshot_output(sid, lid, f"Правка кода: {Path(member).name}")
+        self.journal_append(sid, lid, {
+            "type": "file_edit", "path": member,
+            "ops": [{"find": find, "replace": replace}]})
         return {"replaced": count, "path": member}
+
+    # ── журнал пост-правок: правки редактора/чата/перевода переживают
+    #    повторную адаптацию (re-apply после rebuild из исходника) ────
+    _JOURNAL_MAX = 200
+
+    def _journal_path(self, sid: str, lid: str) -> Path:
+        return self.dir / sid / "edits" / f"{lid}.json"
+
+    def _journal_load(self, sid: str, lid: str) -> list[dict]:
+        p = self._journal_path(sid, lid)
+        if not p.exists():
+            return []
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            return data if isinstance(data, list) else []
+        except Exception:  # noqa: BLE001
+            log.exception("Битый журнал правок %s/%s", sid, lid)
+            return []
+
+    def journal_append(self, sid: str, lid: str, op: dict) -> None:
+        """Дописывает операцию в журнал пост-правок ленда."""
+        try:
+            journal = self._journal_load(sid, lid)
+            op = {**op, "ts": time.time()}
+            journal.append(op)
+            while len(journal) > self._JOURNAL_MAX:
+                dropped = journal.pop(0)
+                mf = dropped.get("mapping_file")
+                if mf:
+                    Path(mf).unlink(missing_ok=True)
+            p = self._journal_path(sid, lid)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(json.dumps(journal, ensure_ascii=False),
+                         encoding="utf-8")
+        except Exception:  # noqa: BLE001
+            log.exception("Не записан журнал правок %s/%s", sid, lid)
+
+    def find_lander_by_output(self, output_name: str) -> Optional[tuple[str, str]]:
+        """(sid, lid) ленда по имени output-архива (для журналирования правок
+        из превью-редактора, где известен только zip)."""
+        if not output_name:
+            return None
+        for meta in self.list():
+            sid = meta.get("id") or meta.get("sid")
+            s = self.get(sid) if sid else None
+            if s is None:
+                continue
+            for lid, ls in (s.landers or {}).items():
+                if getattr(ls, "output_name", None) == output_name:
+                    return sid, lid
+        return None
+
+    @staticmethod
+    def _anchored_ops(old: str, new: str, ctx: int = 32) -> list[dict]:
+        """Дифф old→new как список якорных замен {find, replace}: изменённые
+        куски с контекстом вокруг, контекст расширяется до уникальности find
+        в old. Близкие изменения сливаются, чтобы контексты не пересекались."""
+        import difflib
+        sm = difflib.SequenceMatcher(None, old, new, autojunk=False)
+        spans = [(a1, a2, b1, b2) for tag, a1, a2, b1, b2 in sm.get_opcodes()
+                 if tag != "equal"]
+        if not spans:
+            return []
+        # слить изменения с промежутком < 2*ctx (их контексты бы пересеклись)
+        merged = [list(spans[0])]
+        for a1, a2, b1, b2 in spans[1:]:
+            if a1 - merged[-1][1] < 2 * ctx:
+                merged[-1][1], merged[-1][3] = a2, b2
+            else:
+                merged.append([a1, a2, b1, b2])
+        ops: list[dict] = []
+        for a1, a2, b1, b2 in merged:
+            c = ctx
+            while True:
+                lo, hi = max(0, a1 - c), min(len(old), a2 + c)
+                find = old[lo:hi]
+                if old.count(find) == 1 or (lo == 0 and hi == len(old)):
+                    break
+                c *= 2
+            ops.append({"find": find,
+                        "replace": old[lo:a1] + new[b1:b2] + old[a2:hi]})
+        return ops
+
+    def record_output_file_edit(self, sid: str, lid: str, path: str,
+                                old_text: str, new_text: str) -> None:
+        """Журналирует правку файла (напр. сохранение из превью-редактора)
+        как якорные find→replace, чтобы повторить её после переадаптации."""
+        if old_text == new_text:
+            return
+        ops = self._anchored_ops(old_text, new_text)
+        if ops:
+            self.journal_append(sid, lid, {"type": "file_edit", "path": path,
+                                           "ops": ops})
+
+    def reapply_post_edits(self, sid: str, lid: str) -> list[dict]:
+        """Повторно применяет журнал пост-правок к СВЕЖЕМУ output-архиву
+        (после адаптации). Возвращает заметки для adapt_log. Ненайденные
+        якоря пропускаются с предупреждением (конфликт с новой адаптацией)."""
+        import os
+        import tempfile
+        import zipfile
+        journal = self._journal_load(sid, lid)
+        if not journal:
+            return []
+        target = self._output_zip(sid, lid)
+        with zipfile.ZipFile(target, "r") as zf:
+            texts = {n: zf.read(n).decode("utf-8", "replace")
+                     for n in zf.namelist()
+                     if Path(n).suffix.lower() in _EDIT_TEXT_EXT}
+
+        notes: list[dict] = []
+        changed: set[str] = set()
+
+        def _apply(pairs: list[tuple[str, str]], scope: Optional[str]) -> tuple[int, int]:
+            hit = missed = 0
+            for f, r in pairs:
+                if not f:
+                    continue
+                names = ([scope] if scope in texts else list(texts))
+                found = False
+                for n in names:
+                    t = texts.get(n, "")
+                    if f in t:
+                        texts[n] = t.replace(f, r)
+                        changed.add(n)
+                        found = True
+                hit, missed = (hit + 1, missed) if found else (hit, missed + 1)
+            return hit, missed
+
+        for op in journal:
+            kind = op.get("type")
+            if kind == "file_edit":
+                pairs = [(o.get("find", ""), o.get("replace", ""))
+                         for o in op.get("ops", [])]
+                h, m = _apply(pairs, op.get("path"))
+                if m:
+                    notes.append({"text": f"Повтор правки {op.get('path')}: "
+                                          f"{m} из {h + m} замен не легли "
+                                          "(конфликт с новой адаптацией)",
+                                  "level": "warning"})
+            elif kind == "replace_texts":
+                pairs = [(p.get("find", ""), p.get("replace", ""))
+                         for p in op.get("pairs", [])]
+                h, m = _apply(pairs, None)
+                if m:
+                    notes.append({"text": f"Повтор замен текста: {m} из {h + m} "
+                                          "пар не найдены", "level": "warning"})
+            elif kind == "translation":
+                mf = Path(op.get("mapping_file") or "")
+                if not mf.exists():
+                    continue
+                try:
+                    mapping = json.loads(mf.read_text(encoding="utf-8"))
+                except Exception:  # noqa: BLE001
+                    continue
+                from services.translate import (TEXT_FILE_EXT, apply_to_text,
+                                                ensure_rtl_html, is_rtl)
+                cnt = 0
+                # Только html/php: словарь перевода по js/css/json ломал
+                # код (замена коротких блоков внутри классов/идентификаторов).
+                for n in list(texts):
+                    if Path(n).suffix.lower() not in TEXT_FILE_EXT:
+                        continue
+                    new_t, k = apply_to_text(texts[n], mapping)
+                    if k:
+                        texts[n] = new_t
+                        changed.add(n)
+                        cnt += k
+                lang = op.get("lang", "")
+                if is_rtl(lang):
+                    for n in list(texts):
+                        if Path(n).suffix.lower() in (".php", ".html", ".htm"):
+                            new_t = ensure_rtl_html(texts[n], lang)
+                            if new_t != texts[n]:
+                                texts[n] = new_t
+                                changed.add(n)
+                notes.append({"text": f"Перевод ({lang}) переприменён из кэша: "
+                                      f"{cnt} блоков", "level": "success"})
+
+        if changed:
+            fd, tmp = tempfile.mkstemp(suffix=".zip", dir=str(target.parent))
+            os.close(fd)
+            try:
+                with zipfile.ZipFile(target, "r") as zin, \
+                     zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zout:
+                    for item in zin.infolist():
+                        if item.filename in changed:
+                            zout.writestr(item.filename,
+                                          texts[item.filename].encode("utf-8"))
+                        else:
+                            zout.writestr(item, zin.read(item.filename))
+                os.replace(tmp, target)
+            except Exception:
+                Path(tmp).unlink(missing_ok=True)
+                raise
+            notes.insert(0, {"text": "Пост-правки (редактор/чат/перевод) "
+                                     f"переприменены: файлов {len(changed)}",
+                             "level": "success"})
+        return notes
 
 
 # Синглтон менеджера.

@@ -1,0 +1,263 @@
+{
+ "vertical": "DIABETES",
+ "sets": [
+  {
+   "offer_id": 19971,
+   "offer_name": "19971 Diamin Low [DIABETES-MX] [vsl es -] ReactJS v5",
+   "geo": "MX",
+   "lang": "es",
+   "comments": [
+    {
+     "index": 0,
+     "name": "Carlos Hernández",
+     "text": "¿Alguien de Ciudad de México ya probó Glyconorm? Me preocupa mantener controlados mis niveles de glucosa.",
+     "likes": 92,
+     "avatar": "avatars/1.webp",
+     "appearAtPercent": 5,
+     "replies": []
+    },
+    {
+     "index": 1,
+     "name": "María González",
+     "text": "Mis niveles de azúcar estaban muy altos desde hace meses. Después de usar Glyconorm noté una mejora importante.",
+     "likes": 78,
+     "avatar": "avatars/2.webp",
+     "appearAtPercent": 19,
+     "replies": []
+    },
+    {
+     "index": 2,
+     "name": "José Ramírez",
+     "text": "¿Se puede pagar contra entrega en México?",
+     "likes": 65,
+     "avatar": "avatars/3.webp",
+     "appearAtPercent": 33,
+     "replies": []
+    },
+    {
+     "index": 3,
+     "name": "Ana Martínez",
+     "text": "¿Cuánto tarda el envío a Guadalajara?",
+     "likes": 54,
+     "avatar": "avatars/1.webp",
+     "appearAtPercent": 47,
+     "replies": []
+    },
+    {
+     "index": 4,
+     "name": "Roberto Castillo",
+     "text": "Tengo 61 años y diabetes tipo 2. ¿Alguna persona de mi edad puede compartir su experiencia?",
+     "likes": 47,
+     "avatar": "avatars/2.webp",
+     "appearAtPercent": 61,
+     "replies": []
+    },
+    {
+     "index": 5,
+     "name": "Luis Torres",
+     "text": "Lo pedí la semana pasada en Monterrey. Llegó rápido y estoy satisfecho con los resultados hasta ahora.",
+     "likes": 41,
+     "avatar": "avatars/3.webp",
+     "appearAtPercent": 75,
+     "replies": []
+    },
+    {
+     "index": 6,
+     "name": "Ricardo Moreno",
+     "text": "Me interesa la promoción de 3 unidades. ¿El envío es gratuito en todo México?",
+     "likes": 35,
+     "avatar": "avatars/1.webp",
+     "appearAtPercent": 89,
+     "replies": []
+    },
+    {
+     "index": 7,
+     "name": "Jorge Sánchez",
+     "text": "¿Hay alguien de Puebla que ya lo haya probado?",
+     "likes": 28,
+     "avatar": "avatars/2.webp",
+     "appearAtPercent": 95,
+     "replies": []
+    }
+   ]
+  },
+  {
+   "offer_id": 19927,
+   "offer_name": "19927 Glyconorm [DIABETES-PE] [vsl es -] ReactJS v5",
+   "geo": "PE",
+   "lang": "es",
+   "comments": [
+    {
+     "index": 0,
+     "name": "Javier Ríos",
+     "text": "¿Alguien de Lima ya probó Glyconorm? Tenía miedo de complicaciones por la diabetes.",
+     "likes": 92,
+     "avatar": "avatars/1.webp",
+     "appearAtPercent": 5,
+     "replies": []
+    },
+    {
+     "index": 1,
+     "name": "Susana Quispe",
+     "text": "Mi azúcar estaba por encima de 270 todos los días. Después de Glyconorm se estabilizó alrededor de 90.",
+     "likes": 78,
+     "avatar": "avatars/2.webp",
+     "appearAtPercent": 19,
+     "replies": []
+    },
+    {
+     "index": 2,
+     "name": "Sergio Vargas",
+     "text": "¿Se puede pagar contra entrega en Perú?",
+     "likes": 65,
+     "avatar": "avatars/3.webp",
+     "appearAtPercent": 33,
+     "replies": []
+    },
+    {
+     "index": 3,
+     "name": "María López",
+     "text": "¿En cuánto tiempo llega a Arequipa?",
+     "likes": 54,
+     "avatar": "avatars/1.webp",
+     "appearAtPercent": 47,
+     "replies": []
+    },
+    {
+     "index": 4,
+     "name": "Fernando Castillo",
+     "text": "Tengo 58 años. Si alguien mayor ya lo usó, cuente cómo le fue.",
+     "likes": 47,
+     "avatar": "avatars/2.webp",
+     "appearAtPercent": 61,
+     "replies": []
+    },
+    {
+     "index": 5,
+     "name": "Luis García",
+     "text": "Lo pedí la semana pasada en Trujillo. Llevó unos días pero el azúcar ya bajó.",
+     "likes": 41,
+     "avatar": "avatars/3.webp",
+     "appearAtPercent": 75,
+     "replies": []
+    },
+    {
+     "index": 6,
+     "name": "Ricardo Mendoza",
+     "text": "Me interesa la promo de 3 unidades. ¿El envío es gratis?",
+     "likes": 35,
+     "avatar": "avatars/1.webp",
+     "appearAtPercent": 89,
+     "replies": []
+    },
+    {
+     "index": 7,
+     "name": "Jorge Paredes",
+     "text": "¿Hay alguien de Cusco que lo haya probado?",
+     "likes": 28,
+     "avatar": "avatars/2.webp",
+     "appearAtPercent": 95,
+     "replies": []
+    }
+   ]
+  },
+  {
+   "offer_id": 19109,
+   "offer_name": "19109 Diatonix [DIABETES-PA] [vsl es -] ReactJs v4",
+   "geo": "PA",
+   "lang": "es",
+   "comments": [
+    {
+     "index": 0,
+     "name": "José García",
+     "text": "¡No podía creer lo que veía! Después de años luchando con niveles altos de azúcar en la sangre, finalmente lo tengo bajo control. Ya no dependo de pastillas ni de dietas estrictas. ¡Este método realmente cambió mi vida!",
+     "likes": 9,
+     "avatar": "avatars/mcom1.jpg",
+     "appearAtPercent": 5,
+     "replies": []
+    },
+    {
+     "index": 1,
+     "name": "Carlos López",
+     "text": "Pensé que vivir con diabetes era para siempre, pero este método me demostró que estaba equivocado. Ahora todo está bajo control y tengo energía de nuevo. ¡Es como tener una segunda oportunidad!",
+     "likes": 11,
+     "avatar": "avatars/mcom2.jpg",
+     "appearAtPercent": 12,
+     "replies": []
+    },
+    {
+     "index": 2,
+     "name": "María Hernández",
+     "text": "Este tratamiento es increíble. Antes, mis niveles de azúcar estaban por las nubes, pero ahora están estables. Nunca pensé que obtendría estos resultados sin medicamentos. ¡Gracias por esta información!",
+     "likes": 15,
+     "avatar": "avatars/wcom1.jpg",
+     "appearAtPercent": 19,
+     "replies": []
+    },
+    {
+     "index": 3,
+     "name": "Ana Ramírez",
+     "text": "Es increíble lo que la ciencia moderna puede hacer. Espero que más personas descubran este método y mejoren su calidad de vida.",
+     "likes": 17,
+     "avatar": "avatars/wcom2.jpg",
+     "appearAtPercent": 27,
+     "replies": []
+    },
+    {
+     "index": 4,
+     "name": "Sofía Martínez",
+     "text": "Es sorprendente cómo algo tan simple puede mejorar tanto la vida. Espero que muchas personas se beneficien de esto como yo. ¡El método del doctor realmente me ayudó!",
+     "likes": 18,
+     "avatar": "avatars/wcom3.jpg",
+     "appearAtPercent": 35,
+     "replies": []
+    },
+    {
+     "index": 5,
+     "name": "Laura González",
+     "text": "Vi este video con mucha esperanza. Mi mamá tiene diabetes, y esta información me da ánimos. ¡Definitivamente investigaré más!",
+     "likes": 22,
+     "avatar": "avatars/wcom4.jpg",
+     "appearAtPercent": 45,
+     "replies": []
+    },
+    {
+     "index": 6,
+     "name": "Carmen Torres",
+     "text": "¡Esta historia es muy inspiradora! Escuchar sobre personas que recuperan su salud es motivador. Gracias por compartir.",
+     "likes": 41,
+     "avatar": "avatars/wcom5.jpg",
+     "appearAtPercent": 55,
+     "replies": []
+    },
+    {
+     "index": 7,
+     "name": "Verónica Díaz",
+     "text": "Este video es muy inspirador. A veces siento que la diabetes no tiene solución, pero esto me da esperanza.",
+     "likes": 40,
+     "avatar": "avatars/wcom6.jpg",
+     "appearAtPercent": 65,
+     "replies": []
+    },
+    {
+     "index": 8,
+     "name": "Juan Morales",
+     "text": "Es increíble cómo la información correcta puede cambiar vidas. Este video es un claro ejemplo de lo que se necesita para combatir la diabetes. Gracias, doctor. ¡Que Dios lo bendiga! He usado su método durante dos semanas y ya dejé de tomar metformina.",
+     "likes": 47,
+     "avatar": "avatars/mcom3.jpg",
+     "appearAtPercent": 75,
+     "replies": []
+    },
+    {
+     "index": 9,
+     "name": "Miguel Sánchez",
+     "text": "¿Alguien ha probado este método? Estoy pensando en intentarlo, pero quiero estar seguro de que realmente funciona...",
+     "likes": 50,
+     "avatar": "avatars/mcom4.jpg",
+     "appearAtPercent": 86,
+     "replies": []
+    }
+   ]
+  }
+ ]
+}

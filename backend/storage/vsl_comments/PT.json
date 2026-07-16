@@ -1,0 +1,434 @@
+{
+ "vertical": "POTENCY",
+ "sets": [
+  {
+   "offer_id": 20668,
+   "offer_name": "20668 Adenophrine Middle Adult [POTENCY-PL] [vsl pl -] ReactJS v5",
+   "geo": "PL",
+   "lang": "pl",
+   "comments": [
+    {
+     "index": 0,
+     "name": "Karol Nowak",
+     "text": "Bardzo mądre dla mojej prostaty, spróbuję tego!",
+     "likes": 85,
+     "avatar": "avatars/11.jpeg",
+     "appearAtPercent": 5,
+     "replies": []
+    },
+    {
+     "index": 1,
+     "name": "Jerzy Kowalczyk",
+     "text": "Film wydał mi się krótki, spodziewałem się więcej informacji o prostacie, ale spodobał mi się i zacznę robić wszystko, czego uczy.",
+     "likes": 79,
+     "avatar": "avatars/12.jpeg",
+     "appearAtPercent": 12,
+     "replies": []
+    },
+    {
+     "index": 2,
+     "name": "Łukasz Wójcik",
+     "text": "Każdy, kto cierpi na problemy z prostatą, powinien to zobaczyć, to, co ujawnia, jest niesamowite, nigdy nie sądziłem, że coś takiego jest możliwe!",
+     "likes": 81,
+     "avatar": "avatars/3.jpeg",
+     "appearAtPercent": 19,
+     "replies": []
+    },
+    {
+     "index": 3,
+     "name": "Aleksander Kamiński",
+     "text": "Amen! Niech Bóg błogosławi to rozwiązanie dla prostaty!",
+     "likes": 66,
+     "avatar": "avatars/4.jpeg",
+     "appearAtPercent": 26,
+     "replies": []
+    },
+    {
+     "index": 4,
+     "name": "Robert Zieliński",
+     "text": "Niech Bóg błogosławi tego człowieka za pomoc w problemie z prostatą.",
+     "likes": 50,
+     "avatar": "avatars/13.jpeg",
+     "appearAtPercent": 33,
+     "replies": []
+    },
+    {
+     "index": 5,
+     "name": "Michał Lewandowski",
+     "text": "Naprawdę mam nadzieję, że zadziała na moją prostatę, próbowałem tylu rzeczy! Ale to ma wiele sensu.",
+     "likes": 47,
+     "avatar": "avatars/14.jpeg",
+     "appearAtPercent": 40,
+     "replies": [
+      {
+       "index": 0,
+       "name": "Antoni Lewandowski",
+       "text": "Niesamowite @Michał! Zaczynam dziś z moim bratem... obaj mamy problemy z prostatą.",
+       "avatar": "avatars/7.jpeg",
+       "likes": 41,
+       "appearAtPercent": 47
+      }
+     ]
+    },
+    {
+     "index": 6,
+     "name": "Franciszek Mazur",
+     "text": "Nigdy nie słyszałem o czymś takim na prostatę, wydawało się dziwne, ale ma wiele sensu... już zacząłem to stosować i działa od pierwszych dni!",
+     "likes": 40,
+     "avatar": "avatars/2.jpeg",
+     "appearAtPercent": 50,
+     "replies": []
+    },
+    {
+     "index": 7,
+     "name": "Piotr Wiśniewski",
+     "text": "Czy to naprawdę działa na ból prostaty?",
+     "likes": 18,
+     "avatar": "avatars/9.jpeg",
+     "appearAtPercent": 58,
+     "replies": [
+      {
+       "index": 0,
+       "name": "Michał Lewandowski",
+       "text": "Tak @Piotr, naprawdę działa, jestem żywym dowodem... Prawie straciłem jakość życia przez prostatę... dzięki temu filmowi ją odzyskałem. Cała moja rodzina jest wzruszona, staramy się podziękować tej wspaniałej osobie, która nam pomogła. Udostępniam ten film codziennie.",
+       "avatar": "avatars/15.jpeg",
+       "likes": 22,
+       "appearAtPercent": 62
+      }
+     ]
+    },
+    {
+     "index": 8,
+     "name": "Henryk Dąbrowski",
+     "text": "Rozwiązanie problemu z prostatą zawsze tam było... ale nikt go nie widział. Wielkie dzięki, przyniosłeś światło i nadzieję!",
+     "likes": 17,
+     "avatar": "avatars/5.jpeg",
+     "appearAtPercent": 68,
+     "replies": []
+    },
+    {
+     "index": 9,
+     "name": "Sergiusz Woźniak",
+     "text": "Nie podobał mi się montaż filmu... ale doskonale go rozumiem! Wierzę we wszystko, co mówi o prostacie.",
+     "likes": 15,
+     "avatar": "avatars/10.jpeg",
+     "appearAtPercent": 75,
+     "replies": []
+    },
+    {
+     "index": 10,
+     "name": "Rafał Kozłowski",
+     "text": "Wyślę ten film innym osobom, znam ludzi z przewlekłymi problemami z prostatą, którym ten film może pomóc poprawić jakość życia.",
+     "likes": 11,
+     "avatar": "avatars/9.jpeg",
+     "appearAtPercent": 82,
+     "replies": []
+    },
+    {
+     "index": 11,
+     "name": "Jakub Szymański",
+     "text": "Ledwie zacząłem oglądać ten film, a już dał mi nowy sposób myślenia o problemie z prostatą.",
+     "likes": 9,
+     "avatar": "avatars/8.jpeg",
+     "appearAtPercent": 89,
+     "replies": []
+    },
+    {
+     "index": 12,
+     "name": "Marek Jankowski",
+     "text": "Jest trochę kontrowersyjny, ale myślę, że warto go obejrzeć, aby wyrobić sobie opinię o prostacie...",
+     "likes": 8,
+     "avatar": "avatars/1.jpeg",
+     "appearAtPercent": 95,
+     "replies": []
+    }
+   ]
+  },
+  {
+   "offer_id": 19142,
+   "offer_name": "19142 Adenofrin Low [POTENCY-ES] [vsl es -] ReactJs v4",
+   "geo": "ES",
+   "lang": "es",
+   "comments": [
+    {
+     "index": 0,
+     "name": "Laura Hernández",
+     "text": "¡Muy ingenioso para mis articulaciones, lo voy a probar!",
+     "likes": 85,
+     "avatar": "avatars/11.jpeg",
+     "appearAtPercent": 5,
+     "replies": []
+    },
+    {
+     "index": 1,
+     "name": "Patricia Ramírez",
+     "text": "El video me pareció muy corto, esperaba más información sobre las articulaciones, pero me gustó y voy a empezar a hacer todo lo que enseña.",
+     "likes": 79,
+     "avatar": "avatars/12.jpeg",
+     "appearAtPercent": 12,
+     "replies": []
+    },
+    {
+     "index": 2,
+     "name": "Luis García",
+     "text": "Todos los que sufren de dolor en las articulaciones deberían ver esto, lo que revela es increíble, ¡nunca pensé que esto fuera posible!",
+     "likes": 81,
+     "avatar": "avatars/3.jpeg",
+     "appearAtPercent": 19,
+     "replies": []
+    },
+    {
+     "index": 3,
+     "name": "Alejandro Torres",
+     "text": "¡Amén! ¡Que Dios bendiga por esta solución para las articulaciones!",
+     "likes": 66,
+     "avatar": "avatars/4.jpeg",
+     "appearAtPercent": 26,
+     "replies": []
+    },
+    {
+     "index": 4,
+     "name": "Carmen López",
+     "text": "Que Dios bendiga a este hombre por ayudarnos con el dolor en las articulaciones.",
+     "likes": 50,
+     "avatar": "avatars/13.jpeg",
+     "appearAtPercent": 33,
+     "replies": []
+    },
+    {
+     "index": 5,
+     "name": "Rosa Martínez",
+     "text": "De verdad espero que funcione para mis articulaciones, ¡he probado tantas cosas! Pero esto tiene todo el sentido.",
+     "likes": 47,
+     "avatar": "avatars/14.jpeg",
+     "appearAtPercent": 40,
+     "replies": [
+      {
+       "index": 0,
+       "name": "Miguel Martínez",
+       "text": "¡Increíble @Rosa! Empezamos hoy con mi esposo... los dos tenemos artritis.",
+       "avatar": "avatars/7.jpeg",
+       "likes": 41,
+       "appearAtPercent": 47
+      }
+     ]
+    },
+    {
+     "index": 6,
+     "name": "Carlos Morales",
+     "text": "Nunca había escuchado sobre esto para las articulaciones, me pareció raro pero tiene mucho sentido... ya empecé a probarlo, ¡y está funcionando desde los primeros días!",
+     "likes": 40,
+     "avatar": "avatars/2.jpeg",
+     "appearAtPercent": 50,
+     "replies": []
+    },
+    {
+     "index": 7,
+     "name": "Ana González",
+     "text": "¿De verdad funciona para el dolor en las articulaciones?",
+     "likes": 18,
+     "avatar": "avatars/9.jpeg",
+     "appearAtPercent": 58,
+     "replies": [
+      {
+       "index": 0,
+       "name": "Rosa Martínez",
+       "text": "Sí @Ana, de verdad funciona, soy la prueba viviente... Casi pierdo la movilidad de mis rodillas... gracias a este video las salvé. Toda mi familia está emocionada, estamos tratando de agradecer a esta maravillosa persona que nos ayudó. Comparto este video todos los días.",
+       "avatar": "avatars/15.jpeg",
+       "likes": 22,
+       "appearAtPercent": 62
+      }
+     ]
+    },
+    {
+     "index": 8,
+     "name": "Juan Flores",
+     "text": "La solución para el dolor en las articulaciones siempre estuvo ahí... pero nadie la vio, ¡muchas gracias, trajiste luz y esperanza!",
+     "likes": 17,
+     "avatar": "avatars/5.jpeg",
+     "appearAtPercent": 68,
+     "replies": []
+    },
+    {
+     "index": 9,
+     "name": "Ana González",
+     "text": "No me gustó la edición del video... ¡pero lo entiendo perfectamente! Creo en todo lo que dice sobre las articulaciones.",
+     "likes": 15,
+     "avatar": "avatars/10.jpeg",
+     "appearAtPercent": 75,
+     "replies": []
+    },
+    {
+     "index": 10,
+     "name": "María Sánchez",
+     "text": "Voy a enviar este video a otras personas, conozco gente con dolor crónico en las articulaciones a quienes este video puede ayudarles a mejorar su calidad de vida.",
+     "likes": 11,
+     "avatar": "avatars/9.jpeg",
+     "appearAtPercent": 82,
+     "replies": []
+    },
+    {
+     "index": 11,
+     "name": "Julio Mendoza",
+     "text": "Apenas empecé a ver este video y ya me dio una nueva forma de pensar sobre el dolor en las articulaciones.",
+     "likes": 9,
+     "avatar": "avatars/8.jpeg",
+     "appearAtPercent": 89,
+     "replies": []
+    },
+    {
+     "index": 12,
+     "name": "Mario Reyes",
+     "text": "Esto es un poco controversial, pero creo que vale la pena verlo para formarse una opinión sobre el dolor en las articulaciones...",
+     "likes": 8,
+     "avatar": "avatars/1.jpeg",
+     "appearAtPercent": 95,
+     "replies": []
+    }
+   ]
+  },
+  {
+   "offer_id": 17102,
+   "offer_name": "17102 Libidex [POTENCY-IN] [vsl hi -] ReactJs 2.0",
+   "geo": "IN",
+   "lang": "hi",
+   "comments": [
+    {
+     "index": 0,
+     "name": "Priya Sharma",
+     "text": "आखिरकार समझ आया कि पुरुषों की शक्ति और ऊर्जा को घर पर कैसे बढ़ाया जाए — मैं इन सुझावों को आज़माऊँगी!",
+     "likes": 85,
+     "avatar": "avatars/11.jpeg",
+     "appearAtPercent": 5,
+     "replies": []
+    },
+    {
+     "index": 1,
+     "name": "Sunita Verma",
+     "text": "वीडियो छोटा लेकिन बहुत काम का है। पुरुष शक्ति बढ़ाने और थकान दूर करने का तरीका साफ़ समझाया, मैं इसे अपनाऊँगी।",
+     "likes": 79,
+     "avatar": "avatars/12.jpeg",
+     "appearAtPercent": 12,
+     "replies": []
+    },
+    {
+     "index": 2,
+     "name": "Rajesh Kumar",
+     "text": "जिन्हें कमज़ोरी या पुरुष शक्ति में कमी की समस्या है, उन सभी को यह वीडियो देखना चाहिए — जानकारी शानदार है!",
+     "likes": 81,
+     "avatar": "avatars/3.jpeg",
+     "appearAtPercent": 19,
+     "replies": []
+    },
+    {
+     "index": 3,
+     "name": "Amit Singh",
+     "text": "प्राकृतिक तरीके से पुरुष शक्ति और ऊर्जा बढ़ाने के इन सुझावों के लिए धन्यवाद!",
+     "likes": 66,
+     "avatar": "avatars/4.jpeg",
+     "appearAtPercent": 26,
+     "replies": []
+    },
+    {
+     "index": 4,
+     "name": "Meena Patel",
+     "text": "हमें पुरुष स्वास्थ्य सुधारने और जीवन में आत्मविश्वास वापस लाने का रास्ता दिखाने के लिए आपका आभार।",
+     "likes": 50,
+     "avatar": "avatars/13.jpeg",
+     "appearAtPercent": 33,
+     "replies": []
+    },
+    {
+     "index": 5,
+     "name": "Kavita Gupta",
+     "text": "उम्मीद है ये सुझाव पुरुष शक्ति बढ़ाने में सच में मदद करेंगे। सब कुछ बहुत समझ में आता है।",
+     "likes": 47,
+     "avatar": "avatars/14.jpeg",
+     "appearAtPercent": 40,
+     "replies": [
+      {
+       "index": 0,
+       "name": "Vikram Yadav",
+       "text": "कमाल है @Kavita! मैं आज से ही शुरू करूँगा… फिर से पहले जैसी ताकत और ऊर्जा चाहता हूँ।",
+       "avatar": "avatars/7.jpeg",
+       "likes": 41,
+       "appearAtPercent": 47
+      }
+     ]
+    },
+    {
+     "index": 6,
+     "name": "Suresh Mishra",
+     "text": "पुरुष शक्ति के लिए यह तरीका पहले कभी नहीं सुना था, अजीब लगा, लेकिन कुछ ही दिनों में फर्क महसूस हुआ!",
+     "likes": 40,
+     "avatar": "avatars/2.jpeg",
+     "appearAtPercent": 50,
+     "replies": []
+    },
+    {
+     "index": 8,
+     "name": "Anita Joshi",
+     "text": "क्या यह सच में पुरुष शक्ति और ऊर्जा बढ़ाने में मदद करता है?",
+     "likes": 18,
+     "avatar": "avatars/9.jpeg",
+     "appearAtPercent": 58,
+     "replies": [
+      {
+       "index": 0,
+       "name": "Kavita Gupta",
+       "text": "हाँ @Anita, मेरे पति के लिए तो फर्क दिखा। पहले जैसी थकान नहीं रही। वे रोज़ इन सुझावों का पालन करते हैं।",
+       "avatar": "avatars/15.jpeg",
+       "likes": 22,
+       "appearAtPercent": 62
+      }
+     ]
+    },
+    {
+     "index": 9,
+     "name": "Ramesh Tiwari",
+     "text": "पुरुष शक्ति बढ़ाने का सही रास्ता हमेशा से था… हमें बस पता नहीं था। उम्मीद देने के लिए बहुत-बहुत धन्यवाद!",
+     "likes": 17,
+     "avatar": "avatars/5.jpeg",
+     "appearAtPercent": 68,
+     "replies": []
+    },
+    {
+     "index": 10,
+     "name": "Deepa Nair",
+     "text": "वीडियो की एडिटिंग मुझे ज़्यादा पसंद नहीं आई, लेकिन पुरुष ऊर्जा और शक्ति बढ़ाने के सुझाव बहुत उपयोगी हैं।",
+     "likes": 15,
+     "avatar": "avatars/10.jpeg",
+     "appearAtPercent": 75,
+     "replies": []
+    },
+    {
+     "index": 11,
+     "name": "Geeta Pandey",
+     "text": "मैं यह वीडियो उन दोस्तों और परिवार को भेजूँगी जिन्हें पुरुष कमज़ोरी की समस्या है — यह सच में मदद कर सकता है।",
+     "likes": 11,
+     "avatar": "avatars/9.jpeg",
+     "appearAtPercent": 82,
+     "replies": []
+    },
+    {
+     "index": 12,
+     "name": "Arun Chauhan",
+     "text": "वीडियो शुरू करते ही समझ आ गया कि पुरुष शक्ति और ऊर्जा वापस पाने के लिए यह नया देसी तरीका क्या है।",
+     "likes": 9,
+     "avatar": "avatars/8.jpeg",
+     "appearAtPercent": 89,
+     "replies": []
+    },
+    {
+     "index": 13,
+     "name": "Dinesh Bhatt",
+     "text": "यह ज़रूरी विषय है — पुरुष स्वास्थ्य और शक्ति बनाए रखना सीखने के लिए इसे ज़रूर देखें।",
+     "likes": 8,
+     "avatar": "avatars/1.jpeg",
+     "appearAtPercent": 95,
+     "replies": []
+    }
+   ]
+  }
+ ]
+}

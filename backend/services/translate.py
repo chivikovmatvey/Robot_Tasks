@@ -27,7 +27,7 @@ import zipfile
 from pathlib import Path
 from typing import Optional
 
-from bs4 import BeautifulSoup, Comment
+from bs4 import BeautifulSoup, NavigableString
 
 from services.session import get_manager
 from utils import runners
@@ -203,7 +203,11 @@ def extract_visible_texts(html: str) -> list[str]:
 
     skip_parents = {"script", "style", "noscript", "code", "pre"}
     for node in soup.find_all(string=True):
-        if isinstance(node, Comment):
+        # Только «чистые» текстовые узлы. Подклассы NavigableString — это
+        # комментарии, doctype, CDATA и processing instructions (`<?php … ?>`
+        # парсится именно как PI) — переводить их нельзя: правка PHP-кода
+        # моделью ломает ленд.
+        if type(node) is not NavigableString:
             continue
         parent = node.parent.name if node.parent else ""
         if parent in skip_parents:
@@ -343,6 +347,34 @@ def _translate_one_batch(chunk: list[str], lang_full: str, client, model: str,
     return out
 
 
+def _translate_batch_resilient(chunk: list[str], lang_full: str, client, model: str,
+                               geo_hint_text: str = "") -> dict[str, str]:
+    """Перевод батча, устойчивый к сбоям модели. Раньше упавший батч молча
+    терялся целиком (25 блоков оставались без перевода — «перевод затронул не
+    весь текст»). Теперь: обрезанный ответ → сразу делим батч пополам; прочие
+    ошибки → один повтор, затем деление; одиночный блок не перевёлся → теряем
+    ТОЛЬКО его (с warning), остальное переводится."""
+    def _once() -> dict[str, str]:
+        return _translate_one_batch(chunk, lang_full, client, model, geo_hint_text)
+
+    try:
+        return _once()
+    except Exception as e1:  # noqa: BLE001
+        truncated = "обрезан" in str(e1)
+        if not truncated and len(chunk) > 0:
+            try:
+                return _once()  # повтор: транзиентный сбой сети/модели
+            except Exception:  # noqa: BLE001
+                pass
+        if len(chunk) == 1:
+            log.warning("Блок не переведён (%s): %r", e1, chunk[0][:60])
+            return {}
+        mid = len(chunk) // 2
+        out = _translate_batch_resilient(chunk[:mid], lang_full, client, model, geo_hint_text)
+        out.update(_translate_batch_resilient(chunk[mid:], lang_full, client, model, geo_hint_text))
+        return out
+
+
 def translate_blocks(blocks: list[str], lang: str, client, model: str,
                      geo: str = "") -> dict[str, str]:
     """Переводит блоки последовательно (для CLI/агента). → {original: translated}."""
@@ -350,8 +382,8 @@ def translate_blocks(blocks: list[str], lang: str, client, model: str,
     hint = geo_hint(geo)
     result: dict[str, str] = {}
     for start in range(0, len(blocks), BATCH_SIZE):
-        result.update(_translate_one_batch(blocks[start:start + BATCH_SIZE],
-                                           lang_full, client, model, hint))
+        result.update(_translate_batch_resilient(blocks[start:start + BATCH_SIZE],
+                                                 lang_full, client, model, hint))
     return result
 
 
@@ -380,6 +412,27 @@ def _snapshot_translation(sid: str, lid: str, lang: str) -> None:
         log.warning("Не снять снимок версии после перевода %s/%s", sid, lid)
 
 
+def _journal_translation(sid: str, lid: str, lang: str,
+                         translations: dict[str, str]) -> None:
+    """Кэширует словарь перевода и пишет операцию в журнал пост-правок ленда —
+    после переадаптации перевод переприменяется из кэша БЕЗ повторного похода
+    в нейросеть (см. SessionManager.reapply_post_edits)."""
+    useful = {o: t for o, t in translations.items() if t.strip() != o.strip()}
+    if not useful:
+        return
+    try:
+        import time as _time
+        mgr = get_manager()
+        d = mgr.dir / sid / "translations"
+        d.mkdir(parents=True, exist_ok=True)
+        f = d / f"{lid}_{int(_time.time())}.json"
+        f.write_text(json.dumps(useful, ensure_ascii=False), encoding="utf-8")
+        mgr.journal_append(sid, lid, {"type": "translation", "lang": lang,
+                                      "mapping_file": str(f)})
+    except Exception:  # noqa: BLE001
+        log.exception("Не записан кэш перевода %s/%s", sid, lid)
+
+
 # Языки с письмом справа налево.
 RTL_LANGS = {"ar", "he", "fa", "ur", "ps", "dv", "ku", "sd", "ug", "yi"}
 
@@ -390,12 +443,14 @@ def is_rtl(code: str) -> bool:
 
 def ensure_rtl_html(html: str, lang: str) -> str:
     """Выставляет dir=\"rtl\" (и lang) на <html> для RTL-языков. Если <html>
-    нет — на <body>. Не трогает, если dir уже задан."""
+    нет — на <body>. Уже прописанный dir=\"ltr\" ПЕРЕЗАПИСЫВАЕТСЯ: доноры,
+    скачанные с сайтов, часто несут жёсткий ltr, и на арабском вёрстка едет."""
     code = (lang or "").split(",")[0].strip().lower()
 
     def add_dir(tag: str) -> str:
         if re.search(r"\sdir\s*=", tag, re.I):
-            return tag
+            return re.sub(r'(\sdir\s*=\s*["\']?)[^"\'\s>]*', r"\1rtl", tag,
+                          count=1, flags=re.I)
         ins = ' dir="rtl"'
         if not re.search(r"\slang\s*=", tag, re.I):
             ins += f' lang="{code}"'
@@ -408,21 +463,102 @@ def ensure_rtl_html(html: str, lang: str) -> str:
     return html
 
 
+def _entity_flex_pattern(orig: str) -> "re.Pattern[str]":
+    """Regex, где каждый символ оригинала матчится и как символ, и как его
+    HTML-entity. BS4 при извлечении декодирует entities (&nbsp;→\xa0,
+    &rsquo;→’), а в сыром файле остаётся entity — дословный str.replace не
+    находил такие блоки, и они оставались непереведёнными (кейс 20772:
+    51 блок с &nbsp;)."""
+    import html.entities
+    parts: list[str] = []
+    for ch in orig:
+        alts = [re.escape(ch)]
+        cp = ord(ch)
+        name = html.entities.codepoint2name.get(cp)
+        if name:
+            alts.append(f"&{name};")
+        if name or ch in "&<>\"'":
+            alts.append(f"&#{cp};")
+            alts.append(f"&#[xX]0*{cp:x};")
+        parts.append("(?:%s)" % "|".join(alts) if len(alts) > 1 else alts[0])
+    return re.compile("".join(parts))
+
+
+# Атрибуты, чьё ЦЕЛОЕ значение можно заменять однословным переводом.
+_SAFE_ATTR_RE_TPL = r'((?:placeholder|alt|title|aria-label)\s*=\s*["\']){0}(["\'])'
+
+
+def _apply_single_word(content: str, orig: str, tr: str) -> tuple[str, int]:
+    """Безопасная замена ОДНОСЛОВНОГО блока: только целые значения переводимых
+    атрибутов, value у submit/button и текстовые узлы (>слово<).
+
+    Дословный replace для таких блоков ломал разметку и код: блок «name»
+    (aria-label донора) превращал `name="country"` в `όνομα="country"`,
+    CSS-классы `ingredients__name` и JS-код виджета — конверсия падала
+    (кейс 20683 GR)."""
+    n = 0
+    esc = re.escape(orig)
+    # 1) целые значения переводимых атрибутов
+    content, k = re.subn(_SAFE_ATTR_RE_TPL.format(esc),
+                         lambda m: m.group(1) + tr + m.group(2),
+                         content, flags=re.IGNORECASE)
+    n += k
+    # 2) value целиком — только у submit/button/image инпутов
+    def _sub_btn(m: re.Match) -> str:
+        nonlocal n
+        tag = m.group(0)
+        if not re.search(r'type\s*=\s*["\'](submit|button|image)["\']', tag, re.I):
+            return tag
+        new_tag, k2 = re.subn(rf'(value\s*=\s*["\']){esc}(["\'])',
+                              lambda mm: mm.group(1) + tr + mm.group(2), tag)
+        n += k2
+        return new_tag
+    content = re.sub(r"<input\b[^>]*>", _sub_btn, content)
+    # 3) текстовые узлы: слово — единственное содержимое между тегами
+    content, k = re.subn(rf"(>\s*){esc}(\s*<)",
+                         lambda m: m.group(1) + tr + m.group(2), content)
+    n += k
+    return content, n
+
+
 def apply_to_text(content: str, mapping: dict[str, str]) -> tuple[str, int]:
-    """Точечная замена original→translated (по убыванию длины оригинала)."""
+    """Точечная замена original→translated (по убыванию длины оригинала).
+
+    Однословные блоки применяются ТОЛЬКО в безопасных контекстах (атрибуты
+    перевода / текстовые узлы) — глобальный replace короткого слова ломает
+    name=/class=/JS (см. _apply_single_word)."""
     n = 0
     for orig in sorted(mapping, key=len, reverse=True):
         tr = mapping[orig]
-        if orig == tr or orig not in content:
+        if orig == tr:
             continue
-        content = content.replace(orig, tr)
-        n += 1
+        if not re.search(r"\s", orig):
+            content, k = _apply_single_word(content, orig, tr)
+            if k:
+                n += 1
+            continue
+        if orig in content:
+            content = content.replace(orig, tr)
+            n += 1
+            continue
+        # Фолбэк: в файле оригинал с HTML-entities (&nbsp; и т.п.).
+        try:
+            content, k = _entity_flex_pattern(orig).subn(lambda _m: tr, content)
+        except re.error:
+            k = 0
+        if k:
+            n += 1
     return content, n
 
 
 def _apply_to_zip(zip_path: Path, file_texts: dict[str, str],
-                  translations: dict[str, str], lang: str) -> int:
-    """Пересобирает output-архив с переводом (+ dir=rtl для RTL-языков)."""
+                  translations: dict[str, str], lang: str,
+                  overrides: Optional[dict[str, str]] = None) -> int:
+    """Пересобирает output-архив с переводом (+ dir=rtl для RTL-языков).
+
+    overrides — готовые новые тексты файлов (VSL config.php пересобирается
+    сериализацией конфига, а не текстовой заменой: в PHP-строках экранированные
+    кавычки, дословный replace их не находит)."""
     import tempfile
     rtl = is_rtl(lang)
     changed = 0
@@ -433,7 +569,12 @@ def _apply_to_zip(zip_path: Path, file_texts: dict[str, str],
              zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zout:
             for item in zin.infolist():
                 data = zin.read(item.filename)
-                if item.filename in file_texts:
+                if overrides and item.filename in overrides:
+                    new = overrides[item.filename]
+                    if new != data.decode("utf-8", errors="replace"):
+                        changed += 1
+                    data = new.encode("utf-8")
+                elif item.filename in file_texts:
                     text = data.decode("utf-8", errors="replace")
                     text, n = apply_to_text(text, translations)
                     if rtl:
@@ -448,6 +589,22 @@ def _apply_to_zip(zip_path: Path, file_texts: dict[str, str],
         Path(tmp).unlink(missing_ok=True)
         raise
     return changed
+
+
+# ── VSL: перевод строк config.php ────────────────────────────────
+def _vsl_config_info(zip_path: Path) -> Optional[tuple[str, str, dict]]:
+    """(member, text, cfg) config.php архива; None — не VSL-ленд.
+
+    Видимые тексты VSL живут в PHP-массиве $config (BS4 их не видит — это
+    processing instruction), поэтому конфиг переводится отдельной веткой."""
+    from services.vsl import _find_config_member, parse_config_php
+    try:
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            member = _find_config_member(zf)
+            text = zf.read(member).decode("utf-8", errors="replace")
+        return member, text, parse_config_php(text)
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def target_lang_for(sid: str, lid: str) -> str:
@@ -501,12 +658,24 @@ def translate_lander(sid: str, lid: str, *, target_lang: Optional[str] = None,
         file_texts = {m: zf.read(m).decode("utf-8", errors="replace")
                       for m in text_members}
 
+    # VSL: строки config.php — отдельной веткой (parse → walk → serialize).
+    cfg_info = _vsl_config_info(zip_path)
+    cfg_blocks: list[str] = []
+    if cfg_info:
+        from services.vsl import config_translatable_strings
+        file_texts.pop(cfg_info[0], None)
+        cfg_blocks = config_translatable_strings(cfg_info[2])
+
     all_blocks: dict[str, None] = {}
     per_file_blocks: dict[str, list[str]] = {}
     for m, content in file_texts.items():
         blocks = extract_visible_texts(content)
         per_file_blocks[m] = blocks
         for b in blocks:
+            all_blocks.setdefault(b, None)
+    if cfg_blocks:
+        per_file_blocks[cfg_info[0]] = cfg_blocks
+        for b in cfg_blocks:
             all_blocks.setdefault(b, None)
 
     if not all_blocks:
@@ -529,8 +698,19 @@ def translate_lander(sid: str, lid: str, *, target_lang: Optional[str] = None,
         return {"lang": lang, "model": model, "diff": diff,
                 "applied": 0, "mode": "preview"}
 
-    changed_files = _apply_to_zip(zip_path, file_texts, translations, lang)
+    overrides: dict[str, str] = {}
+    if cfg_info and cfg_blocks:
+        from services.vsl import config_apply_translations, replace_config_php
+        overrides[cfg_info[0]] = replace_config_php(
+            cfg_info[1], config_apply_translations(cfg_info[2], translations))
+    # Применяем только к файлам, где извлеклись блоки: файлы без видимого
+    # текста (api.php и другой чистый PHP) словарём не трогаем — замена там
+    # ломала код ($dimensionName). Для RTL нужен dir= во всех html-файлах.
+    apply_files = (file_texts if is_rtl(lang) else
+                   {m: t for m, t in file_texts.items() if per_file_blocks.get(m)})
+    changed_files = _apply_to_zip(zip_path, apply_files, translations, lang, overrides)
     _snapshot_translation(sid, lid, lang)
+    _journal_translation(sid, lid, lang, translations)
     return {"lang": lang, "model": model, "diff": diff,
             "applied": changed_files, "mode": "executed"}
 
@@ -558,10 +738,24 @@ def translate_lander_stream(sid: str, lid: str, *, target_lang: Optional[str] = 
             members = [n for n in zf.namelist() if Path(n).suffix.lower() in TEXT_FILE_EXT]
             file_texts = {m: zf.read(m).decode("utf-8", errors="replace") for m in members}
 
+        # VSL: строки config.php — отдельной веткой (parse → walk → serialize).
+        cfg_info = _vsl_config_info(zip_path)
+        cfg_blocks: list[str] = []
+        if cfg_info:
+            from services.vsl import config_translatable_strings
+            file_texts.pop(cfg_info[0], None)
+            cfg_blocks = config_translatable_strings(cfg_info[2])
+
         all_blocks: dict[str, None] = {}
-        for content in file_texts.values():
-            for b in extract_visible_texts(content):
+        files_with_blocks: set[str] = set()
+        for m, content in file_texts.items():
+            found = extract_visible_texts(content)
+            if found:
+                files_with_blocks.add(m)
+            for b in found:
                 all_blocks.setdefault(b, None)
+        for b in cfg_blocks:
+            all_blocks.setdefault(b, None)
         blocks = list(all_blocks.keys())
         total = len(blocks)
         yield {"type": "start", "lang": lang, "lang_name": lang_full,
@@ -574,27 +768,45 @@ def translate_lander_stream(sid: str, lid: str, *, target_lang: Optional[str] = 
         translations: dict[str, str] = {}
         done = 0
         # Параллельные запросы к aitunnel — кратно быстрее (было ~2 мин).
-        with ThreadPoolExecutor(max_workers=5) as ex:
-            futs = {ex.submit(_translate_one_batch, b, lang_full, client, model, geo_hint_text): b
+        # НЕ context-manager: при обрыве клиента (кнопка «Стоп» закрывает SSE)
+        # GeneratorExit прилетает в yield — гасим пул БЕЗ ожидания и НЕ применяем
+        # перевод к архиву (прерванный перевод не должен трогать ленд).
+        ex = ThreadPoolExecutor(max_workers=5)
+        try:
+            futs = {ex.submit(_translate_batch_resilient, b, lang_full, client, model,
+                              geo_hint_text): b
                     for b in batches}
             for fut in as_completed(futs):
                 batch = futs[fut]
-                try:
-                    res = fut.result()
-                except Exception as e:  # noqa: BLE001
-                    done += len(batch)
-                    yield {"type": "progress", "done": done, "total": total,
-                           "warn": str(e)[:120]}
-                    continue
+                res = fut.result()  # resilient: не бросает, возвращает что перевелось
                 translations.update(res)
                 done += len(batch)
+                lost = len(batch) - len(res)
+                if lost:
+                    yield {"type": "progress", "done": done, "total": total,
+                           "warn": f"{lost} блок(ов) не переведено после ретраев"}
                 changed = [{"original": o, "translated": t}
                            for o, t in res.items() if t.strip() != o.strip()]
                 yield {"type": "block", "items": changed, "done": done, "total": total}
+        except GeneratorExit:
+            ex.shutdown(wait=False, cancel_futures=True)
+            log.info("Перевод %s/%s прерван пользователем — изменения НЕ применены",
+                     sid, lid)
+            raise
+        ex.shutdown(wait=True)
 
-        # Применяем (+RTL) сразу.
-        changed_files = _apply_to_zip(zip_path, file_texts, translations, lang)
+        # Применяем (+RTL) сразу — только если дошли до конца без прерывания.
+        overrides: dict[str, str] = {}
+        if cfg_info and cfg_blocks:
+            from services.vsl import config_apply_translations, replace_config_php
+            overrides[cfg_info[0]] = replace_config_php(
+                cfg_info[1], config_apply_translations(cfg_info[2], translations))
+        # Только файлы с извлечёнными блоками — не трогаем чистый PHP (api.php).
+        apply_files = (file_texts if is_rtl(lang) else
+                       {m: t for m, t in file_texts.items() if m in files_with_blocks})
+        changed_files = _apply_to_zip(zip_path, apply_files, translations, lang, overrides)
         _snapshot_translation(sid, lid, lang)
+        _journal_translation(sid, lid, lang, translations)
         yield {"type": "done", "applied": changed_files, "translated": len(translations)}
     except Exception as e:  # noqa: BLE001
         log.exception("Сбой стрим-перевода")

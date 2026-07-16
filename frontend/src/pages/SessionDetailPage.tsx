@@ -5,6 +5,7 @@ import { Markdown } from '../components/Markdown';
 import { OfferNamesHint } from '../components/OfferNamesHint';
 import { TaskDetailsModal } from '../components/TaskDetailsModal';
 import { Icon } from '../components/Icon';
+import { VslPanel } from '../components/VslPanel';
 // Редактор кода тянет CodeMirror (~700КБ) — грузим чанк только при входе в режим.
 const LanderEditor = lazy(() =>
   import('../components/LanderEditor').then((m) => ({ default: m.LanderEditor })));
@@ -49,7 +50,10 @@ function LogView({ log }: { log?: LogLine[] }) {
   );
 }
 
-function LanderPanel({ sid, lander }: { sid: string; lander: LanderState }) {
+function LanderPanel({ sid, lander, isVsl, sessionTasks }: {
+  sid: string; lander: LanderState; isVsl?: boolean;
+  sessionTasks?: { uid: string; title: string }[];
+}) {
   const lid = lander.lander_id;
   const [params, setParams] = useState<Record<string, any> | null>(null);
   const [loadingSuggest, setLoadingSuggest] = useState(false);
@@ -57,12 +61,14 @@ function LanderPanel({ sid, lander }: { sid: string; lander: LanderState }) {
   const [group, setGroup] = useState('');        // эффективная группа/оффер ленда
   const [groupDraft, setGroupDraft] = useState('');
   const [savingGroup, setSavingGroup] = useState(false);
+  const [groupPhotosNote, setGroupPhotosNote] = useState('');  // фото новой группы
   const [error, setError] = useState('');
   const [version, setVersion] = useState(0);
   const [versions, setVersions] = useState<LanderVersion[]>([]);   // история версий ленда
   const [currentVid, setCurrentVid] = useState<string | null>(null);
   const [restoring, setRestoring] = useState(false);
   const [leftTab, setLeftTab] = useState<'params' | 'chat'>('params');
+  const [vslTab, setVslTab] = useState<'config' | 'adapt'>('config'); // подрежим VSL-ленда
   const [showKeitaro, setShowKeitaro] = useState(false);
   const [showTranslate, setShowTranslate] = useState(false);
   // Ширина превью (null = на всю доступную область) — для проверки адаптива.
@@ -166,11 +172,13 @@ function LanderPanel({ sid, lander }: { sid: string; lander: LanderState }) {
           setGroupDraft(s.group || '');
           const saved: any = lander.adapt_params;
           if (saved) {
-            // Сохранённые параметры прошлой адаптации — основа, НО исходные
-            // цены донора (src_price_*) берём из СВЕЖЕГО скана: они описывают
-            // сам ленд, и после пересканирования/переустановки старое значение
-            // (напр. ошибочное «50») тихо ломало замену цены.
-            const next = { ...saved };
+            // Сохранённые параметры прошлой адаптации — поверх свежего suggest
+            // (после переустановки в adapt_params остаются только ключи
+            // статуса заливки — недостающие поля формы заполняет suggest).
+            // Исходные цены донора (src_price_*) всегда из СВЕЖЕГО скана: они
+            // описывают сам ленд, и после пересканирования/переустановки
+            // старое значение (напр. ошибочное «50») тихо ломало замену цены.
+            const next = { ...rest, ...saved };
             for (const k of ['src_price_new_num', 'src_price_new_cur',
                              'src_price_old_num', 'src_price_old_cur'] as const) {
               if (rest[k] !== undefined && rest[k] !== '' && rest[k] !== saved[k]) next[k] = rest[k];
@@ -214,12 +222,17 @@ function LanderPanel({ sid, lander }: { sid: string; lander: LanderState }) {
   const saveGroup = async (value?: string) => {
     const next = (value ?? groupDraft).trim();
     if (next === group.trim()) return;
-    setSavingGroup(true); setError('');
+    setSavingGroup(true); setError(''); setGroupPhotosNote('');
     try {
       const s = await api.setLanderGroup(sid, lid, next);
       setGroup(s.group || '');
       setGroupDraft(s.group || '');
       lander.offer_override = next || null;
+      // Бэк заодно поискал фото продукта НОВОЙ группы на странице оффера.
+      const added = (s as any).photos_added || 0;
+      setGroupPhotosNote(added > 0
+        ? `Найдено фото продукта новой группы: ${added} (в «Загруженные медиа»)`
+        : 'Новых фото продукта для группы не найдено');
       // Подставляем пересчитанные под новую группу гео/продукт/вертикаль.
       // Цену НЕ трогаем — сохраняем то, что ввёл пользователь вручную.
       setParams((p) => ({
@@ -247,7 +260,9 @@ function LanderPanel({ sid, lander }: { sid: string; lander: LanderState }) {
       lander.output_url = res.output_url || lander.output_url;
       lander.status = res.status;
       lander.adapt_log = res.log;
-      lander.adapt_params = params;  // чтобы введённые значения (цена и пр.) не терялись при ремаунте
+      // мёрж, не перезапись: статус заливки (keitaro_offer_id, кампания,
+      // вариант/ревью AdRobot) должен пережить адаптацию и локально
+      lander.adapt_params = { ...(lander.adapt_params || {}), ...params };
       setVersion((v) => v + 1);
     } catch (e: any) {
       setError(e.message || 'Ошибка адаптации');
@@ -299,6 +314,24 @@ function LanderPanel({ sid, lander }: { sid: string; lander: LanderState }) {
         <span style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 999, color: '#fff', background: statusColor(lander.status) }}>
           {lander.status}
         </span>
+        {/* Статус заливки — живёт в adapt_params и переживает переадаптацию */}
+        {(lander.adapt_params as any)?.keitaro_offer_id && (
+          <span
+            className="mono"
+            title={[
+              `Залит в Keitaro: ${(lander.adapt_params as any).keitaro_name || (lander.adapt_params as any).keitaro_offer_id}`,
+              (lander.adapt_params as any).campaign_url ? `Тестовая кампания: ${(lander.adapt_params as any).campaign_url}` : '',
+              (lander.adapt_params as any).variant_added ? 'Вариант добавлен в задачу AdRobot' : '',
+              (lander.adapt_params as any).variants_moved ? `Варианты перемещены: ${(lander.adapt_params as any).variants_moved}` : '',
+              (lander.adapt_params as any).review_submitted ? 'Отправлен на ревью' : '',
+            ].filter(Boolean).join('\n')}
+            style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 999, border: '1px solid var(--accent, #7c6fff)', color: 'var(--accent, #7c6fff)', whiteSpace: 'nowrap' }}
+          >
+            KT {(lander.adapt_params as any).keitaro_offer_id}
+            {(lander.adapt_params as any).campaign_url ? ' · тест' : ''}
+            {(lander.adapt_params as any).review_submitted ? ' · ревью' : ''}
+          </span>
+        )}
         {ACTIVE_STATUSES.has(lander.status) && <span className="dim small">⏳ выполняется…</span>}
         {/* Выбор версии ленда: по умолчанию текущая; смена = откат на выбранный шаг. */}
         {versions.length > 0 && (
@@ -339,9 +372,43 @@ function LanderPanel({ sid, lander }: { sid: string; lander: LanderState }) {
             ))}
           </div>
         )}
-        {lander.task_title && (
+        {/* Привязка к задаче: в объединённой сессии (несколько задач) — селект;
+            без привязки вариант/ревью не знают, в какую задачу идти. */}
+        {sessionTasks && sessionTasks.length > 1 ? (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }} title="Задача этого ленда — вариант/ревью уйдут в неё">
+            <Icon name="clipboard" size={12} />
+            <select
+              className="form-input"
+              value={lander.task_uid || ''}
+              onChange={async (e) => {
+                const uid = e.target.value;
+                if (!uid) return;
+                try {
+                  const r = await api.setLanderTask(sid, lid, uid);
+                  lander.task_uid = r.task_uid;
+                  lander.task_title = r.task_title;
+                  setVersion((v) => v + 1);
+                } catch (err: any) {
+                  setError(err.message || 'Не удалось привязать задачу');
+                }
+              }}
+              style={{
+                fontSize: 12, padding: '2px 6px', width: 'auto', maxWidth: 260,
+                borderColor: lander.task_uid ? undefined : 'var(--warning, #e8a857)',
+              }}
+            >
+              <option value="" disabled>— выбери задачу ленда —</option>
+              {sessionTasks.map((t) => (
+                <option key={t.uid} value={t.uid}>{t.title || t.uid}</option>
+              ))}
+            </select>
+            {!lander.task_uid && (
+              <span className="small" style={{ color: 'var(--warning, #e8a857)' }}>не привязан</span>
+            )}
+          </span>
+        ) : lander.task_title ? (
           <span className="dim small" title="Задача-источник этого ленда"><Icon name="clipboard" size={12} /> {lander.task_title}</span>
-        )}
+        ) : null}
         {lander.offer_name && <span className="dim small" style={{ marginLeft: 'auto' }}>Донор: <code>{lander.offer_name}</code></span>}
       </div>
 
@@ -410,7 +477,45 @@ function LanderPanel({ sid, lander }: { sid: string; lander: LanderState }) {
               />
             </div>
             <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '1rem', display: leftTab === 'params' ? 'block' : 'none' }}>
-            {!params ? (
+            {/* VSL: подрежимы «Конфиг VSL» и «Адаптация» (обычная форма) */}
+            {isVsl && (lander.status === 'ready' || lander.status === 'adapted') && (
+              <div style={{ display: 'flex', border: '1px solid var(--border, #2a2a2a)', borderRadius: 6, overflow: 'hidden', marginBottom: '0.8rem' }}>
+                {([['config', 'Конфиг VSL'], ['adapt', 'Адаптация']] as const).map(([m, label]) => (
+                  <button key={m} onClick={() => setVslTab(m)}
+                          style={{
+                            flex: 1, fontSize: 12, padding: '5px 10px', cursor: 'pointer', border: 'none',
+                            fontWeight: 600,
+                            background: vslTab === m ? 'var(--accent)' : 'transparent',
+                            color: vslTab === m ? '#fff' : 'var(--text-muted)',
+                          }}>{label}</button>
+                ))}
+              </div>
+            )}
+            {isVsl && !(lander.status === 'ready' || lander.status === 'adapted') ? (
+              <p className="dim small">Жду скачивания ленда…</p>
+            ) : isVsl && vslTab === 'config' ? (
+              <div>
+                <VslPanel sid={sid} lid={lid} hasOutput={!!lander.output_name}
+                          onChanged={() => setVersion((v) => v + 1)} />
+                <div style={{ marginTop: '0.8rem', display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                  {lander.output_name && (
+                    <button className="btn" style={{ fontSize: 13 }} onClick={() => setShowTranslate((v) => !v)}
+                            title="Переводит и тексты config.php (форма, уведомления, комментарии)">
+                      Перевод
+                    </button>
+                  )}
+                  <button className="btn" style={{ fontSize: 13 }} onClick={() => setShowKeitaro((v) => !v)}>
+                    → Keitaro
+                  </button>
+                </div>
+                {showTranslate && lander.output_name && (
+                  <TranslatePanel sid={sid} lid={lid} onApplied={() => setVersion((v) => v + 1)} />
+                )}
+                {showKeitaro && (
+                  <KeitaroUploadPanel sid={sid} lid={lid} lander={lander} onChanged={() => setVersion((v) => v + 1)} />
+                )}
+              </div>
+            ) : !params ? (
               <p className="dim small">Готовлю параметры…</p>
             ) : (
           <div>
@@ -449,8 +554,18 @@ function LanderPanel({ sid, lander }: { sid: string; lander: LanderState }) {
                   ? 'Подменено вручную. ↺ — вернуть оффер задачи.'
                   : 'Из задачи. Изменение пересчитает продукт/гео/язык/цену.'}
               </div>
+              {groupPhotosNote && (
+                <div className="small" style={{ marginTop: 4, color: '#4ade80' }}>
+                  <Icon name="image" size={12} /> {groupPhotosNote}
+                </div>
+              )}
             </Field>
             <div style={{ fontSize: 13, fontWeight: 600, margin: '0.75rem 0' }}>Параметры адаптации (черновик — проверь)</div>
+            {isVsl && (
+              <div className="dim small" style={{ margin: '-0.4rem 0 0.6rem' }}>
+                VSL: адаптация применится к рабочей копии — правки config.php сохранятся.
+              </div>
+            )}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px,1fr))', gap: '0.6rem' }}>
               <Field label="ГЕО (geo_id)">
                 <input className="form-input" value={params.geo_id || ''} onChange={(e) => set('geo_id', e.target.value)} />
@@ -475,7 +590,8 @@ function LanderPanel({ sid, lander }: { sid: string; lander: LanderState }) {
               Старая цена считается автоматически как ×2 от новой.
             </div>
 
-            <ImageMapEditor sid={sid} lander={lander} params={params} set={set} onChanged={() => setVersion((v) => v + 1)} />
+            {/* key с группой: после смены группы блок перечитает замены (там появились фото новой группы) */}
+            <ImageMapEditor key={`${lid}:${group}`} sid={sid} lander={lander} params={params} set={set} onChanged={() => setVersion((v) => v + 1)} />
 
             <div style={{ marginTop: '0.8rem', display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
               <button className="btn btn-primary" onClick={runAdapt} disabled={adapting}>
@@ -500,7 +616,7 @@ function LanderPanel({ sid, lander }: { sid: string; lander: LanderState }) {
               <TranslatePanel sid={sid} lid={lid} onApplied={() => setVersion((v) => v + 1)} />
             )}
             {showKeitaro && (lander.output_name || lander.status === 'ready') && (
-              <KeitaroUploadPanel sid={sid} lid={lid} lander={lander} />
+              <KeitaroUploadPanel sid={sid} lid={lid} lander={lander} onChanged={() => setVersion((v) => v + 1)} />
             )}
             {lander.adapt_log && lander.adapt_log.length > 0 && (
               <div style={{ marginTop: '0.8rem' }}><LogView log={lander.adapt_log} /></div>
@@ -636,6 +752,24 @@ function MediaModal({ url, name, onClose }: { url: string; name: string; onClose
 
 // Выбор замены с предпросмотром: кнопка показывает текущий выбор, по клику —
 // всплывающий список с МИНИАТЮРАМИ (нативный <select> не умеет картинки).
+// Миниатюра-опция дропдауна замен. ВАЖНО: компонент ВНЕ ReplSelect и выбор
+// по onPointerDown — компонент, объявленный внутри рендера, пересоздавал DOM
+// миниатюр при каждом ре-рендере (поллинг каждые 3с), и click (mousedown+
+// mouseup по ОДНОМУ узлу) не успевал сработать — «список открыт, но не
+// нажимается». pointerdown срабатывает мгновенно и от подмены DOM не страдает.
+function ReplThumb({ name, selected, urlFor, onPick }: {
+  name: string; selected: boolean; urlFor: (name: string) => string; onPick: (name: string) => void;
+}) {
+  return (
+    <div title={name} onPointerDown={(e) => { e.preventDefault(); onPick(name); }}
+         style={{ width: 64, textAlign: 'center', cursor: 'pointer', padding: 3, borderRadius: 6, border: selected ? '1px solid var(--accent, #7c6fff)' : '1px solid var(--border, #2a2a2a)' }}>
+      <img src={urlFor(name)} alt={name} loading="lazy"
+           style={{ width: '100%', height: 44, objectFit: 'contain', background: '#000', borderRadius: 3, display: 'block' }} />
+      <div className="dim" style={{ fontSize: 8, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 2 }}>{name}</div>
+    </div>
+  );
+}
+
 function ReplSelect({ value, taskOptions, assetOptions, urlFor, onChange }: {
   value: string;
   taskOptions: string[];
@@ -644,16 +778,19 @@ function ReplSelect({ value, taskOptions, assetOptions, urlFor, onChange }: {
   onChange: (name: string) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const Thumb = ({ name }: { name: string }) => (
-    <div key={name} title={name} onClick={() => { onChange(name); setOpen(false); }}
-         style={{ width: 64, textAlign: 'center', cursor: 'pointer', padding: 3, borderRadius: 6, border: name === value ? '1px solid var(--accent, #7c6fff)' : '1px solid var(--border, #2a2a2a)' }}>
-      <img src={urlFor(name)} alt={name} loading="lazy"
-           style={{ width: '100%', height: 44, objectFit: 'contain', background: '#000', borderRadius: 3, display: 'block' }} />
-      <div className="dim" style={{ fontSize: 8, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 2 }}>{name}</div>
-    </div>
-  );
+  const rootRef = useRef<HTMLDivElement>(null);
+  // Закрытие по клику вне списка (раньше открытый список висел навсегда).
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: PointerEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('pointerdown', onDown);
+    return () => document.removeEventListener('pointerdown', onDown);
+  }, [open]);
+  const pick = (name: string) => { onChange(name); setOpen(false); };
   return (
-    <div style={{ flex: 1, position: 'relative', minWidth: 0 }}>
+    <div ref={rootRef} style={{ flex: 1, position: 'relative', minWidth: 0 }}>
       <button type="button" className="form-input" onClick={() => setOpen((v) => !v)}
               style={{ width: '100%', textAlign: 'left', fontSize: 11, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, overflow: 'hidden' }}>
         {value
@@ -663,13 +800,13 @@ function ReplSelect({ value, taskOptions, assetOptions, urlFor, onChange }: {
         <span className="dim" style={{ marginLeft: 'auto' }}>▾</span>
       </button>
       {open && (
-        <div style={{ position: 'absolute', zIndex: 50, top: '100%', left: 0, right: 0, marginTop: 2, maxHeight: 240, overflowY: 'auto', background: 'var(--bg-elevated, #141414)', border: '1px solid var(--border, #2a2a2a)', borderRadius: 8, padding: 6 }}>
+        <div style={{ position: 'absolute', zIndex: 500, top: '100%', left: 0, right: 0, marginTop: 2, maxHeight: 240, overflowY: 'auto', background: 'var(--bg-elevated, #141414)', border: '1px solid var(--border, #2a2a2a)', borderRadius: 8, padding: 6 }}>
           <div className="dim small" style={{ cursor: 'pointer', padding: '2px 4px' }}
-               onClick={() => { onChange(''); setOpen(false); }}>— не менять (оригинал) —</div>
+               onPointerDown={(e) => { e.preventDefault(); pick(''); }}>— не менять (оригинал) —</div>
           {taskOptions.length > 0 && <div className="dim" style={{ fontSize: 9, textTransform: 'uppercase', margin: '4px 2px' }}>Замены задачи</div>}
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>{taskOptions.map((n) => <Thumb key={n} name={n} />)}</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>{taskOptions.map((n) => <ReplThumb key={n} name={n} selected={n === value} urlFor={urlFor} onPick={pick} />)}</div>
           {assetOptions.length > 0 && <div className="dim" style={{ fontSize: 9, textTransform: 'uppercase', margin: '4px 2px' }}>Общие (assets)</div>}
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>{assetOptions.map((n) => <Thumb key={n} name={n} />)}</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>{assetOptions.map((n) => <ReplThumb key={n} name={n} selected={n === value} urlFor={urlFor} onPick={pick} />)}</div>
         </div>
       )}
     </div>
@@ -863,7 +1000,7 @@ function ImageMapEditor({ sid, lander, params, set, onChanged }: {
             <div key={m.path} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               {/* мини-превью сразу — чтобы по картинке понять, что меняется */}
               {m.kind === 'video' ? (
-                <video src={origUrl} muted
+                <video src={origUrl} muted preload="metadata"
                        onClick={() => setPreview({ url: origUrl, name: m.name })}
                        title={'Видео на ленде: ' + m.name}
                        style={{ flexShrink: 0, width: 40, height: 40, objectFit: 'cover', borderRadius: 4, cursor: 'pointer', background: '#000' }} />
@@ -1258,10 +1395,11 @@ function LanderChat({ sid, lid, onLanderUpdate }: {
   useEffect(() => {
     api.aiStatus().then((st) => {
       setStatus(st);
-      // По умолчанию для чата — Qwen (vision), иначе первая доступная.
+      // По умолчанию: локальная модель (бесплатно), иначе Qwen (vision), иначе первая.
       if (!model) {
         const ids = (st.models || []).map((m) => m.id);
-        const dflt = ids.find((id) => id.includes('qwen')) || ids[0] || st.model || '';
+        const dflt = ids.find((id) => id.startsWith('local:'))
+          || ids.find((id) => id.includes('qwen')) || ids[0] || st.model || '';
         setModel(dflt);
       }
     }).catch(() => setStatus({ configured: false, model: null, balance: null }));
@@ -1451,14 +1589,19 @@ function TranslatePanel({ sid, lid, onApplied }: { sid: string; lid: string; onA
   const [info, setInfo] = useState<{ lang_name: string; rtl: boolean } | null>(null);
   const [doneInfo, setDoneInfo] = useState<{ applied: number } | null>(null);
   const [error, setError] = useState('');
+  const [aborted, setAborted] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
+  const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => { api.translateLanguages().then(setLanguages).catch(() => {}); }, []);
   useEffect(() => { listRef.current?.scrollTo({ top: listRef.current.scrollHeight }); }, [items]);
+  useEffect(() => () => abortRef.current?.abort(), []); // размонтирование = стоп
 
   const run = async () => {
     setRunning(true); setError(''); setItems([]); setDoneInfo(null);
-    setProgress({ done: 0, total: 0 }); setInfo(null);
+    setProgress({ done: 0, total: 0 }); setInfo(null); setAborted(false);
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
     try {
       await translateStream(sid, lid, lang || undefined, (ev) => {
         if (ev.type === 'start') { setInfo({ lang_name: ev.lang_name, rtl: ev.rtl }); setProgress({ done: 0, total: ev.total }); }
@@ -1466,13 +1609,17 @@ function TranslatePanel({ sid, lid, onApplied }: { sid: string; lid: string; onA
         else if (ev.type === 'progress') { setProgress({ done: ev.done, total: ev.total }); if (ev.warn) setError(ev.warn); }
         else if (ev.type === 'done') { setDoneInfo({ applied: ev.applied }); onApplied(); }
         else if (ev.type === 'error') { setError(ev.error); }
-      });
+      }, ctrl.signal);
     } catch (e: any) {
-      setError(e.message || 'Ошибка перевода');
+      if (e?.name === 'AbortError') setAborted(true); // остановлено — ленд НЕ изменён
+      else setError(e.message || 'Ошибка перевода');
     } finally {
+      abortRef.current = null;
       setRunning(false);
     }
   };
+
+  const stop = () => { abortRef.current?.abort(); };
 
   const pct = progress.total ? Math.round((progress.done / progress.total) * 100) : 0;
 
@@ -1485,9 +1632,17 @@ function TranslatePanel({ sid, lid, onApplied }: { sid: string; lid: string; onA
           <option value="">авто по гео</option>
           {languages.map((l) => <option key={l.code} value={l.code}>{l.name}</option>)}
         </select>
-        <button className="btn btn-primary" onClick={run} disabled={running} style={{ fontSize: 12 }}>
-          {running ? 'Перевожу…' : 'Перевести'}
-        </button>
+        {running ? (
+          <button className="btn" onClick={stop}
+                  style={{ fontSize: 12, background: '#7f1d1d', color: '#fca5a5' }}>
+            ◼ Стоп
+          </button>
+        ) : (
+          <button className="btn btn-primary" onClick={run} style={{ fontSize: 12 }}>
+            Перевести
+          </button>
+        )}
+        {running && <span className="dim small">Перевожу… стоп = ленд не изменится</span>}
         {info?.rtl && <span className="dim small">RTL · dir=rtl</span>}
       </div>
 
@@ -1519,18 +1674,32 @@ function TranslatePanel({ sid, lid, onApplied }: { sid: string; lid: string; onA
       {doneInfo && !running && (
         <div className="dim small" style={{ marginTop: 6 }}>Готово · переведено и применено к ленду. Проверь превью; вычитай текст перед заливкой.</div>
       )}
+      {aborted && !running && (
+        <div className="dim small" style={{ marginTop: 6, color: '#f59e0b' }}>Остановлено · перевод НЕ применён, ленд без изменений.</div>
+      )}
     </div>
   );
 }
 
 // Панель заливки ленда в Keitaro: показывает план (dry-run, без Keitaro),
 // затем по явному подтверждению запускает реальное создание оффера.
-function KeitaroUploadPanel({ sid, lid, lander }: { sid: string; lid: string; lander?: LanderState }) {
+function KeitaroUploadPanel({ sid, lid, lander, onChanged }: {
+  sid: string; lid: string; lander?: LanderState; onChanged?: () => void;
+}) {
   // Уже залитый ленд: восстанавливаем экран «готово» из сохранённых параметров.
   const ap = (lander?.adapt_params || {}) as Record<string, any>;
+  // Статус заливки пишется и в ЛОКАЛЬНЫЙ объект ленда: сервер сохраняет его в
+  // adapt_params, но сессия на клиенте не перечитывается (поллинг остановлен,
+  // лендов в работе нет) — без этого закрытие/открытие панели или переключение
+  // вкладок «теряло» экран «залито» до F5.
+  const persist = (patch: Record<string, any>) => {
+    if (lander) lander.adapt_params = { ...(lander.adapt_params || {}), ...patch };
+    onChanged?.();
+  };
   const [plan, setPlan] = useState<KeitaroPlan | null>(null);
   const [type, setType] = useState<string>('');       // '' = авто
   const [network, setNetwork] = useState<string>(''); // '' = авто (с донора)
+  const [adult, setAdult] = useState(false);          // [pl fi -] → [pl fi adult]
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [steps, setSteps] = useState<string[]>([]);   // живой прогресс заливки
@@ -1557,6 +1726,7 @@ function KeitaroUploadPanel({ sid, lid, lander }: { sid: string; lid: string; la
     try {
       await api.addTaskVariant(sid, lid);
       setVariantAdded(true);
+      persist({ variant_added: true });
     } catch (e: any) {
       setError(e.message || 'Не удалось добавить вариант');
     } finally { setTaskBusy(''); }
@@ -1567,6 +1737,7 @@ function KeitaroUploadPanel({ sid, lid, lander }: { sid: string; lid: string; la
     try {
       await api.moveTaskVariants(sid, lid, scope);
       setVariantsMoved(scope);
+      persist({ variants_moved: scope });
     } catch (e: any) {
       setError(e.message || 'Не удалось переместить варианты');
     } finally { setTaskBusy(''); }
@@ -1577,6 +1748,7 @@ function KeitaroUploadPanel({ sid, lid, lander }: { sid: string; lid: string; la
     try {
       await api.submitTaskReview(sid, lid);
       setReviewSent(true);
+      persist({ review_submitted: true });
     } catch (e: any) {
       setError(e.message || 'Не удалось отправить на ревью');
     } finally { setTaskBusy(''); }
@@ -1587,6 +1759,7 @@ function KeitaroUploadPanel({ sid, lid, lander }: { sid: string; lid: string; la
     try {
       const r = await api.testCampaign(sid, lid);
       setCampaign({ campaign_url: r.campaign_url, campaign_name: r.campaign_name });
+      persist({ campaign_url: r.campaign_url, campaign_name: r.campaign_name });
     } catch (e: any) {
       setError(e.message || 'Не удалось создать тестовую кампанию');
     } finally {
@@ -1594,25 +1767,26 @@ function KeitaroUploadPanel({ sid, lid, lander }: { sid: string; lid: string; la
     }
   };
 
-  const loadPlan = (t: string) => {
+  const loadPlan = (t: string, a = adult) => {
     setLoading(true); setError(''); setCreated(null);
-    api.keitaroPlan(sid, lid, t || undefined)
+    api.keitaroPlan(sid, lid, t || undefined, a)
       .then(setPlan)
       .catch((e) => setError(e.message || 'Не удалось собрать план'))
       .finally(() => setLoading(false));
   };
-  useEffect(() => { loadPlan(type); /* eslint-disable-next-line */ }, [sid, lid, type]);
+  useEffect(() => { loadPlan(type); /* eslint-disable-next-line */ }, [sid, lid, type, adult]);
 
   const doUpload = async () => {
     setUploading(true); setError(''); setSteps([]);
     try {
-      await keitaroUploadStream(sid, lid, { type: type || undefined, network: network || undefined }, (ev) => {
+      await keitaroUploadStream(sid, lid, { type: type || undefined, network: network || undefined, adult }, (ev) => {
         if (ev.type === 'step' && ev.message) setSteps((s) => [...s, ev.message!]);
         else if (ev.type === 'done') {
           const r = ev.result as KeitaroPlan;
           if (r.mode === 'uploaded' && r.offer_id && r.final_name) {
             // авто-переименование прошло на бэке — сразу экран «готово»
             setRenamed({ offer_id: r.offer_id, final_name: r.final_name });
+            persist({ keitaro_offer_id: r.offer_id, keitaro_name: r.final_name });
           } else {
             // fallback: id не определён однозначно — ручной выбор
             setCreated(r);
@@ -1638,8 +1812,9 @@ function KeitaroUploadPanel({ sid, lid, lander }: { sid: string; lid: string; la
     if (selectedId === '' || !created) return;
     setRenaming(true); setError('');
     try {
-      const r = await api.keitaroRename(sid, lid, selectedId as number, type || undefined);
+      const r = await api.keitaroRename(sid, lid, selectedId as number, type || undefined, adult);
       setRenamed({ offer_id: r.offer_id, final_name: r.final_name });
+      persist({ keitaro_offer_id: r.offer_id, keitaro_name: r.final_name });
     } catch (e: any) {
       setError(e.message || 'Ошибка переименования');
     } finally {
@@ -1683,6 +1858,13 @@ function KeitaroUploadPanel({ sid, lid, lander }: { sid: string; lid: string; la
             <span className="dim" style={{ flex: '0 0 110px' }}>Сеть</span>
             <input className="form-input" value={network} onChange={(e) => setNetwork(e.target.value)}
                    placeholder="авто (с донора), напр. 75" style={{ fontSize: 12, padding: '2px 6px', width: 200 }} />
+          </div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 12 }}>
+            <span className="dim" style={{ flex: '0 0 110px' }}>Adult</span>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+              <input type="checkbox" checked={adult} onChange={(e) => setAdult(e.target.checked)} />
+              <span className="dim small">пометка в названии: [pl fi -] → [pl fi adult]</span>
+            </label>
           </div>
           <Row k="Скобка" v={plan.bracket || '—'} />
           <Row k="Название" v={plan.name_template} />
@@ -1950,6 +2132,32 @@ export function SessionDetailPage() {
     }
   };
 
+  // Переименование вкладки ленда (id не меняется, только отображаемое имя).
+  const renameLander = async (l: LanderState) => {
+    const cur = l.display_name || l.lander_id;
+    const name = prompt('Имя ленда (пусто — вернуть id):', cur);
+    if (name === null || name.trim() === cur) return;
+    setError('');
+    try {
+      const s = await api.renameLander(sid, l.lander_id, name.trim());
+      setSession(s);
+    } catch (e: any) {
+      setError(e.message || 'Не удалось переименовать ленд');
+    }
+  };
+
+  // Дубль ленда: копия архивов/параметров/журнала, встаёт после оригинала.
+  const duplicateLander = async (lid: string) => {
+    setError('');
+    try {
+      const r = await api.duplicateLander(sid, lid);
+      setSession(r.session);
+      setActive(r.lander_id);
+    } catch (e: any) {
+      setError(e.message || 'Не удалось дублировать ленд');
+    }
+  };
+
   // ── drag-and-drop порядка лендов ──
   const startDrag = (lid: string) => {
     dragIdRef.current = lid;
@@ -2080,7 +2288,8 @@ export function SessionDetailPage() {
                   </span>
                   <button
                     onClick={() => setActive(l.lander_id)}
-                    title={l.lander_id + (l.task_title ? ` · ${l.task_title}` : '')}
+                    onDoubleClick={() => renameLander(l)}
+                    title={l.lander_id + (l.display_name ? ` · ${l.display_name}` : '') + (l.task_title ? ` · ${l.task_title}` : '') + ' · двойной клик — переименовать'}
                     style={{
                       display: 'flex', flexDirection: 'column', gap: 2, flex: 1, minWidth: 0,
                       padding: '0.55rem 0.4rem 0.55rem 0.2rem', border: 'none', cursor: 'pointer',
@@ -2089,13 +2298,37 @@ export function SessionDetailPage() {
                   >
                     <span style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%', minWidth: 0 }}>
                       <span style={{ width: 8, height: 8, borderRadius: 999, flexShrink: 0, background: statusColor(l.status) }} title={l.status} />
-                      <span style={{ fontSize: 12, fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.lander_id}</span>
+                      <span style={{ fontSize: 12, fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.display_name || l.lander_id}</span>
                     </span>
                     {multiTask && l.task_title && (
                       <span className="dim" style={{ fontSize: 10, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%', paddingLeft: 14 }}>
                         {l.task_title}
                       </span>
                     )}
+                  </button>
+                  <button
+                    className="lander-del"
+                    onClick={() => renameLander(l)}
+                    title="Переименовать ленд"
+                    aria-label="Переименовать ленд"
+                    style={{
+                      flexShrink: 0, width: 24, border: 'none', cursor: 'pointer',
+                      background: 'transparent', color: 'var(--text-muted)', fontSize: 12, lineHeight: 1,
+                    }}
+                  >
+                    ✎
+                  </button>
+                  <button
+                    className="lander-del"
+                    onClick={() => duplicateLander(l.lander_id)}
+                    title="Дублировать ленд (копия архивов, параметров и правок)"
+                    aria-label="Дублировать ленд"
+                    style={{
+                      flexShrink: 0, width: 24, border: 'none', cursor: 'pointer',
+                      background: 'transparent', color: 'var(--text-muted)', fontSize: 12, lineHeight: 1,
+                    }}
+                  >
+                    ⧉
                   </button>
                   {/^\d{4,5}$/.test(l.lander_id) && (
                     <button
@@ -2169,7 +2402,8 @@ export function SessionDetailPage() {
         {/* контент активного ленда */}
         <div style={{ flex: 1, overflow: 'hidden', padding: '1rem 1.25rem' }}>
           {activeLander
-            ? <LanderPanel key={activeLander.lander_id} sid={sid} lander={activeLander} />
+            ? <LanderPanel key={activeLander.lander_id} sid={sid} lander={activeLander} isVsl={!!session.is_vsl}
+                           sessionTasks={(session.tasks || []).map((t) => ({ uid: t.uid, title: t.title }))} />
             : <p className="dim">Нет лендов.</p>}
         </div>
       </div>
