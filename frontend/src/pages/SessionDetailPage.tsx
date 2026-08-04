@@ -1,6 +1,6 @@
-import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react';
+import { Suspense, lazy, useEffect, useRef, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { api, chatStream, translateStream, keitaroUploadStream, SessionFull, LanderState, SuggestParams, LogLine, CommentAttachment, LanderMedia, Replacement, ChatMessage, AiStatus, KeitaroPlan, LanderVersion } from '../lib/api';
+import { api, chatStream, translateStream, keitaroUploadStream, SessionFull, LanderState, SuggestParams, LogLine, CommentAttachment, LanderMedia, Replacement, ChatMessage, AiStatus, KeitaroPlan, LanderVersion, BulkUploadStatus } from '../lib/api';
 import { Markdown } from '../components/Markdown';
 import { OfferNamesHint } from '../components/OfferNamesHint';
 import { TaskDetailsModal } from '../components/TaskDetailsModal';
@@ -28,11 +28,20 @@ function splitPrice(s: string): [string, string] {
   return [num, cur];
 }
 
-function doubleNum(num: string): string {
+// Старая цена из новой по проценту скидки: 50% → ×2, 75% → ×4 и т.д.
+// (старая = новая / (1 - скидка/100), округляем до целого).
+function oldFromDiscount(num: string, pct: number): string {
   const n = parseFloat((num || '').replace(',', '.'));
-  if (isNaN(n)) return '';
-  const v = n * 2;
-  return Number.isInteger(v) ? String(v) : String(v);
+  if (isNaN(n) || !pct || pct <= 0 || pct >= 100) return '';
+  const v = n / (1 - pct / 100);
+  return String(Math.round(v));
+}
+
+// Человекочитаемый размер архива.
+function fmtSize(bytes?: number | null): string {
+  if (bytes == null) return '';
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} КБ`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} МБ`;
 }
 
 function LogView({ log }: { log?: LogLine[] }) {
@@ -95,68 +104,43 @@ function LanderPanel({ sid, lander, isVsl, sessionTasks }: {
   // область расширяется вправо, по горизонтали — скролл если шире окна.
   const effW = previewWidth ?? pane.w;
 
-  // Высота контента ленда (iframe same-origin) — чтобы iframe растягивался на
-  // весь ленд, а вертикальный скролл был у внешнего контейнера (крупная полоса).
+  // ВАЖНО: iframe ФИКСИРОВАННОЙ высоты (высота области), скролл — ВНУТРИ
+  // iframe, как в редакторе. Раньше iframe растягивался на всю высоту ленда:
+  // из-за этого секции с height:100vh получали высоту ВСЕГО ленда (сайт
+  // «растягивался» с пустыми простынями), а position:fixed модалки сайта
+  // центрировались посреди документа, а не экрана.
   const iframeRef = useRef<HTMLIFrameElement>(null);
-  const [contentH, setContentH] = useState<number | null>(null);
-  const iframeRoRef = useRef<ResizeObserver | null>(null);
-  const measure = useCallback(() => {
-    try {
-      const d = iframeRef.current?.contentDocument;
-      if (!d) return;
-      const h = Math.max(
-        d.documentElement?.scrollHeight || 0, d.body?.scrollHeight || 0,
-        d.documentElement?.offsetHeight || 0, d.body?.offsetHeight || 0,
-      );
-      if (h) setContentH(h);
-    } catch { /* cross-origin — оставим авто-высоту */ }
-  }, []);
 
-  // Длинные ленды дорисовываются после onLoad (lazy-картинки, веб-шрифты, JS-
-  // секции) → высота росла и низ обрезался. Подписываемся на изменения размера
-  // содержимого iframe и домеряем по мере роста + несколько отложенных замеров.
-  const onPreviewLoad = useCallback(() => {
-    measure();
-    [200, 600, 1200, 2500, 4000].forEach((ms) => setTimeout(measure, ms));
-    try {
-      const d = iframeRef.current?.contentDocument;
-      iframeRoRef.current?.disconnect();
-      if (d && 'ResizeObserver' in window) {
-        const ro = new ResizeObserver(() => measure());
-        if (d.body) ro.observe(d.body);
-        if (d.documentElement) ro.observe(d.documentElement);
-        iframeRoRef.current = ro;
-      }
-      // Картинки без размеров (lazy) — домеряем по их загрузке.
-      d?.querySelectorAll('img')?.forEach((img) => {
-        if (!(img as HTMLImageElement).complete) img.addEventListener('load', measure, { once: true });
-      });
-    } catch { /* cross-origin */ }
-  }, [measure]);
-
-  useEffect(() => () => iframeRoRef.current?.disconnect(), []);
-
-  // Пересчитываем высоту при смене ширины/версии (меняется раскладка).
-  useEffect(() => {
-    const t1 = setTimeout(measure, 120);
-    const t2 = setTimeout(measure, 700);
-    return () => { clearTimeout(t1); clearTimeout(t2); };
-  }, [previewWidth, version, measure]);
-
-  const startResize = (e: React.MouseEvent) => {
+  // Ресайз ширины превью. Pointer-события с capture: мышь над iframe (другой
+  // документ) не отдаёт mouseup окну — от этого ручка «прилипала» к курсору
+  // после отпускания и дёргалась. Пока тянем — iframe не принимает события.
+  const [resizing, setResizing] = useState(false);
+  const startResize = (e: React.PointerEvent) => {
     e.preventDefault();
+    const handle = e.currentTarget as HTMLElement;
+    try { handle.setPointerCapture(e.pointerId); } catch { /* ignore */ }
     const startX = e.clientX;
     const startW = previewWidth ?? pane.w ?? 800;
-    const onMove = (ev: MouseEvent) => {
-      setPreviewWidth(Math.max(280, Math.round(startW + (ev.clientX - startX))));
+    setResizing(true);
+    let raf = 0;
+    const onMove = (ev: PointerEvent) => {
+      if (raf) return; // не чаще кадра — без дёрганья
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        setPreviewWidth(Math.max(280, Math.round(startW + (ev.clientX - startX))));
+      });
     };
-    const onUp = () => {
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
+    const end = () => {
+      handle.removeEventListener('pointermove', onMove);
+      handle.removeEventListener('pointerup', end);
+      handle.removeEventListener('pointercancel', end);
+      if (raf) cancelAnimationFrame(raf);
+      setResizing(false);
       document.body.style.userSelect = '';
     };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
+    handle.addEventListener('pointermove', onMove);
+    handle.addEventListener('pointerup', end);
+    handle.addEventListener('pointercancel', end);
     document.body.style.userSelect = 'none';
   };
 
@@ -204,15 +188,32 @@ function LanderPanel({ sid, lander, isVsl, sessionTasks }: {
   }, [lander.status]);
 
   const set = (k: string, v: any) => setParams((p) => ({ ...(p || {}), [k]: v }));
+  const discountPct = Number(params?.discount_pct ?? 50) || 50;
   const setPrice = (which: 'new' | 'old', v: string) => {
     const [num, cur] = splitPrice(v);
     setParams((p) => {
+      const pct = Number(p?.discount_pct ?? 50) || 50;
       const next: Record<string, any> = { ...(p || {}), [`price_${which}`]: v, [`price_${which}_num`]: num, [`price_${which}_cur`]: cur };
-      // Новая цена → старая автоматически ×2 (правило техотдела).
+      // Новая цена → старая автоматически по проценту скидки (дефолт 50% = ×2).
       if (which === 'new') {
-        const dbl = doubleNum(num);
-        next.price_old = dbl ? `${dbl} ${cur}`.trim() : '';
-        next.price_old_num = dbl;
+        const old = oldFromDiscount(num, pct);
+        next.price_old = old ? `${old} ${cur}`.trim() : '';
+        next.price_old_num = old;
+        next.price_old_cur = cur;
+      }
+      return next;
+    });
+  };
+  // Смена процента скидки — пересчитать старую цену от текущей новой.
+  const setDiscount = (pct: number) => {
+    setParams((p) => {
+      const num = (p?.price_new_num || '') as string;
+      const cur = (p?.price_new_cur || '') as string;
+      const next: Record<string, any> = { ...(p || {}), discount_pct: pct };
+      const old = oldFromDiscount(num, pct);
+      if (old) {
+        next.price_old = `${old} ${cur}`.trim();
+        next.price_old_num = old;
         next.price_old_cur = cur;
       }
       return next;
@@ -280,6 +281,29 @@ function LanderPanel({ sid, lander, isVsl, sessionTasks }: {
       .catch(() => {});
   }, [sid, lid, lander.output_name, version]);
 
+  // Конвертация всех изображений ленда в WebP (бэкенд optimize) → новый output.
+  const [webpBusy, setWebpBusy] = useState(false);
+  const [webpNote, setWebpNote] = useState('');
+  const runWebp = async () => {
+    setWebpBusy(true); setError(''); setWebpNote('');
+    try {
+      const r = await api.optimizeWebp(sid, lid);
+      if (!r.success) { setError(r.error || 'Оптимизация не удалась'); return; }
+      lander.output_name = r.output_name || lander.output_name;
+      lander.output_url = r.output_url || lander.output_url;
+      if (r.status) lander.status = r.status;
+      if (r.size_before != null && r.size_after != null) {
+        lander.output_size = r.size_after;
+        setWebpNote(`WebP: ${fmtSize(r.size_before)} → ${fmtSize(r.size_after)}`);
+      }
+      setVersion((v) => v + 1);
+    } catch (e: any) {
+      setError(e.message || 'Ошибка конвертации в WebP');
+    } finally {
+      setWebpBusy(false);
+    }
+  };
+
   const restoreVersion = async (vid: string) => {
     if (!vid || vid === currentVid) return;
     const v = versions.find((x) => x.id === vid);
@@ -314,6 +338,12 @@ function LanderPanel({ sid, lander, isVsl, sessionTasks }: {
         <span style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 999, color: '#fff', background: statusColor(lander.status) }}>
           {lander.status}
         </span>
+        {(lander.output_size ?? lander.size) != null && (
+          <span className="dim small" title={lander.output_size != null
+            ? 'Размер адаптированного архива' : 'Размер исходного архива'}>
+            <Icon name="archive" size={11} /> {fmtSize(lander.output_size ?? lander.size)}
+          </span>
+        )}
         {/* Статус заливки — живёт в adapt_params и переживает переадаптацию */}
         {(lander.adapt_params as any)?.keitaro_offer_id && (
           <span
@@ -442,7 +472,9 @@ function LanderPanel({ sid, lander, isVsl, sessionTasks }: {
       {editorMounted && previewUrl && (
         <div style={{ display: uiMode === 'edit' ? 'flex' : 'none', flex: 1, minHeight: 0 }}>
           <Suspense fallback={<p className="dim small">Загружаю редактор…</p>}>
-            <LanderEditor key={previewSource} zipName={previewSource} />
+            {/* version бампается при адаптации/переводе/нейро/откате — редактор
+                перечитает файлы, иначе показывал бы код до этих изменений */}
+            <LanderEditor key={previewSource} zipName={previewSource} contentVersion={version} />
           </Suspense>
         </div>
       )}
@@ -582,12 +614,26 @@ function LanderPanel({ sid, lander, isVsl, sessionTasks }: {
               <Field label="Новая цена">
                 <input className="form-input" value={params.price_new || ''} onChange={(e) => setPrice('new', e.target.value)} placeholder="590 MXN" />
               </Field>
-              <Field label="Старая цена (×2 авто)">
+              <Field label="Скидка на ленде">
+                <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                  <select className="form-input" value={[30, 40, 50, 60, 70, 75].includes(discountPct) ? String(discountPct) : 'custom'}
+                          onChange={(e) => { if (e.target.value !== 'custom') setDiscount(Number(e.target.value)); }}
+                          style={{ flex: 1 }}>
+                    {[30, 40, 50, 60, 70, 75].map((p) => <option key={p} value={p}>−{p}%</option>)}
+                    <option value="custom">свой %…</option>
+                  </select>
+                  <input className="form-input" type="number" min={1} max={99} value={discountPct}
+                         onChange={(e) => { const v = Number(e.target.value); if (v >= 1 && v <= 99) setDiscount(v); }}
+                         title="Процент скидки (старая цена = новая / (1 − %/100))"
+                         style={{ width: 58 }} />
+                </div>
+              </Field>
+              <Field label={`Старая цена (авто по −${discountPct}%)`}>
                 <input className="form-input" value={params.price_old || ''} onChange={(e) => setPrice('old', e.target.value)} placeholder="1180 MXN" />
               </Field>
             </div>
             <div className="dim small" style={{ marginTop: '0.6rem' }}>
-              Старая цена считается автоматически как ×2 от новой.
+              Старая цена считается автоматически из новой по проценту скидки (по умолчанию −50% = ×2). Можно поправить руками.
             </div>
 
             {/* key с группой: после смены группы блок перечитает замены (там появились фото новой группы) */}
@@ -604,6 +650,13 @@ function LanderPanel({ sid, lander, isVsl, sessionTasks }: {
                   <button className="btn" style={{ fontSize: 13 }} onClick={() => setShowTranslate((v) => !v)}>Перевод</button>
                 </>
               )}
+              {(lander.output_name || lander.status === 'ready') && (
+                <button className="btn" style={{ fontSize: 13 }} onClick={runWebp} disabled={webpBusy}
+                        title="Конвертировать все изображения архива в WebP (уменьшает размер)">
+                  {webpBusy ? 'Конвертирую…' : <><Icon name="image" size={13} /> Все фото → WebP</>}
+                </button>
+              )}
+              {webpNote && <span className="small" style={{ color: '#4ade80' }}>{webpNote}</span>}
               {/* Заливка доступна и БЕЗ адаптации — уйдёт исходный архив ленда */}
               {(lander.output_name || lander.status === 'ready') && (
                 <button className="btn" style={{ fontSize: 13 }} onClick={() => setShowKeitaro((v) => !v)}
@@ -667,40 +720,39 @@ function LanderPanel({ sid, lander, isVsl, sessionTasks }: {
 
           {previewUrl ? (
             <div style={{ position: 'relative', flex: 1, minHeight: 0 }}>
-              {/* скролл-контейнер: крупная вертикальная полоса для навигации по ленду */}
+              {/* контейнер: горизонтальный скролл при узком окне; вертикальный
+                  скролл — ВНУТРИ iframe (высота = высоте области, см. выше) */}
               <div
                 ref={previewPaneRef}
-                style={{ position: 'absolute', inset: 0, overflowX: 'auto', overflowY: 'auto', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 8 }}
+                style={{ position: 'absolute', inset: 0, overflowX: 'auto', overflowY: 'hidden', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 8 }}
               >
                 <div
                   style={{
                     width: previewWidth ? `${effW}px` : '100%',
-                    height: contentH ? `${contentH}px` : '100%',
+                    height: '100%',
                   }}
                 >
                   <iframe
                     ref={iframeRef}
                     key={version}
                     src={previewUrl}
-                    onLoad={onPreviewLoad}
-                    scrolling="no"
-                    style={{ width: '100%', height: '100%', border: 'none', background: '#fff', display: 'block' }}
+                    style={{ width: '100%', height: '100%', border: 'none', background: '#fff', display: 'block', pointerEvents: resizing ? 'none' : 'auto' }}
                     title={`preview-${lid}`}
                   />
                 </div>
               </div>
               {/* ручка ресайза по правому краю видимой области ленда (вне скролла) */}
               <div
-                onMouseDown={startResize}
+                onPointerDown={startResize}
                 title="Тяни, чтобы менять ширину превью"
                 style={{
                   position: 'absolute', top: 0,
                   left: `${Math.min(previewWidth ?? pane.w, pane.w) - 5}px`,
-                  width: 10, height: '100%', cursor: 'ew-resize',
+                  width: 10, height: '100%', cursor: 'ew-resize', touchAction: 'none',
                   display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 2,
                 }}
               >
-                <div style={{ width: 4, height: 48, borderRadius: 4, background: 'var(--accent)', opacity: 0.7 }} />
+                <div style={{ width: 4, height: 48, borderRadius: 4, background: 'var(--accent)', opacity: resizing ? 1 : 0.7 }} />
               </div>
             </div>
           ) : (
@@ -715,7 +767,12 @@ function LanderPanel({ sid, lander, isVsl, sessionTasks }: {
 }
 
 // Модалка предпросмотра медиа (фото / гиф / видео — по расширению).
-function MediaModal({ url, name, onClose }: { url: string; name: string; onClose: () => void }) {
+// Для картинок поддерживает ОБРЕЗКУ: режим «Обрезать» → выделение рамкой →
+// «Сохранить обрезку» отдаёт File в onCropSave (кладётся в замены задачи).
+function MediaModal({ url, name, onClose, onCropSave }: {
+  url: string; name: string; onClose: () => void;
+  onCropSave?: (file: File) => Promise<void>;
+}) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', onKey);
@@ -723,6 +780,63 @@ function MediaModal({ url, name, onClose }: { url: string; name: string; onClose
   }, [onClose]);
   const ext = (name.split('.').pop() || '').toLowerCase();
   const isVideo = ['mp4', 'webm', 'mov', 'ogg'].includes(ext);
+  const canCrop = !isVideo && !!onCropSave && ext !== 'gif';
+
+  const [cropMode, setCropMode] = useState(false);
+  const [rect, setRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const imgRef = useRef<HTMLImageElement>(null);
+  const dragRef = useRef<{ sx: number; sy: number } | null>(null);
+
+  // Выделение рамки: pointerdown = угол, тянем до pointerup (с capture —
+  // отпускание за пределами картинки тоже завершает выделение).
+  const cropDown = (e: React.PointerEvent) => {
+    if (!cropMode || !imgRef.current) return;
+    e.preventDefault();
+    const box = imgRef.current.getBoundingClientRect();
+    const sx = e.clientX - box.left, sy = e.clientY - box.top;
+    dragRef.current = { sx, sy };
+    setRect({ x: sx, y: sy, w: 0, h: 0 });
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  };
+  const cropMove = (e: React.PointerEvent) => {
+    if (!cropMode || !dragRef.current || !imgRef.current) return;
+    const box = imgRef.current.getBoundingClientRect();
+    const cx = Math.min(Math.max(e.clientX - box.left, 0), box.width);
+    const cy = Math.min(Math.max(e.clientY - box.top, 0), box.height);
+    const { sx, sy } = dragRef.current;
+    setRect({ x: Math.min(sx, cx), y: Math.min(sy, cy), w: Math.abs(cx - sx), h: Math.abs(cy - sy) });
+  };
+  const cropUp = () => { dragRef.current = null; };
+
+  const saveCrop = async () => {
+    const img = imgRef.current;
+    if (!img || !rect || rect.w < 4 || rect.h < 4 || !onCropSave) return;
+    setBusy(true); setErr('');
+    try {
+      const box = img.getBoundingClientRect();
+      const kx = img.naturalWidth / box.width, ky = img.naturalHeight / box.height;
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(rect.w * kx));
+      canvas.height = Math.max(1, Math.round(rect.h * ky));
+      const ctx = canvas.getContext('2d')!;
+      ctx.drawImage(img, rect.x * kx, rect.y * ky, rect.w * kx, rect.h * ky,
+                    0, 0, canvas.width, canvas.height);
+      const mime = ['jpg', 'jpeg'].includes(ext) ? 'image/jpeg' : ext === 'webp' ? 'image/webp' : 'image/png';
+      const blob: Blob = await new Promise((res, rej) =>
+        canvas.toBlob((b) => (b ? res(b) : rej(new Error('canvas.toBlob'))), mime, 0.92));
+      const base = name.replace(/\.[^.]+$/, '');
+      const outExt = mime === 'image/jpeg' ? 'jpg' : mime === 'image/webp' ? 'webp' : 'png';
+      await onCropSave(new File([blob], `crop_${base}.${outExt}`, { type: mime }));
+      onClose();
+    } catch (e: any) {
+      setErr(e.message || 'Не удалось сохранить обрезку (возможно, картинка с другого домена)');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div
       onClick={onClose}
@@ -735,14 +849,42 @@ function MediaModal({ url, name, onClose }: { url: string; name: string; onClose
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <span style={{ color: '#fff', fontSize: 13, fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
           <div style={{ flex: 1 }} />
+          {canCrop && !cropMode && (
+            <button className="btn" style={{ fontSize: 12 }} onClick={() => { setCropMode(true); setRect(null); }}>
+              <Icon name="crop" size={12} /> Обрезать
+            </button>
+          )}
+          {cropMode && (
+            <>
+              <span className="dim small" style={{ color: '#cbd5e1' }}>выдели область рамкой</span>
+              <button className="btn btn-primary" style={{ fontSize: 12 }} disabled={busy || !rect || rect.w < 4}
+                      onClick={saveCrop}>
+                {busy ? 'Сохраняю…' : 'Сохранить обрезку'}
+              </button>
+              <button className="btn" style={{ fontSize: 12 }} disabled={busy}
+                      onClick={() => { setCropMode(false); setRect(null); }}>Отмена</button>
+            </>
+          )}
           <a href={url} target="_blank" rel="noopener" className="btn" style={{ fontSize: 12, textDecoration: 'none' }}>Открыть ↗</a>
           <button className="btn" style={{ fontSize: 12 }} onClick={onClose}>Закрыть ✕</button>
         </div>
+        {err && <div className="small" style={{ color: '#f87171' }}>{err}</div>}
         <div style={{ background: '#000', borderRadius: 8, overflow: 'auto', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           {isVideo ? (
             <video src={url} controls autoPlay style={{ maxWidth: '88vw', maxHeight: '80vh', display: 'block' }} />
           ) : (
-            <img src={url} alt={name} style={{ maxWidth: '88vw', maxHeight: '80vh', objectFit: 'contain', display: 'block' }} />
+            <div style={{ position: 'relative', display: 'inline-block', cursor: cropMode ? 'crosshair' : 'default', touchAction: 'none' }}
+                 onPointerDown={cropDown} onPointerMove={cropMove} onPointerUp={cropUp} onPointerCancel={cropUp}>
+              <img ref={imgRef} src={url} alt={name} crossOrigin="anonymous" draggable={false}
+                   style={{ maxWidth: '88vw', maxHeight: '80vh', objectFit: 'contain', display: 'block', userSelect: 'none' }} />
+              {cropMode && rect && rect.w > 0 && (
+                <div style={{
+                  position: 'absolute', left: rect.x, top: rect.y, width: rect.w, height: rect.h,
+                  border: '1.5px dashed var(--accent, #7c6fff)',
+                  boxShadow: '0 0 0 9999px rgba(0,0,0,0.55)', pointerEvents: 'none',
+                }} />
+              )}
+            </div>
           )}
         </div>
       </div>
@@ -1052,7 +1194,17 @@ function ImageMapEditor({ sid, lander, params, set, onChanged }: {
         Замены задачи изолированы и не засоряют общий список. «вернуть оригинал» убирает замену — после повторной адаптации вернётся исходное медиа. «превью» открывает фото/гиф/видео.
       </div>
 
-      {preview && <MediaModal url={preview.url} name={preview.name} onClose={() => setPreview(null)} />}
+      {preview && (
+        <MediaModal
+          url={preview.url} name={preview.name} onClose={() => setPreview(null)}
+          onCropSave={async (file) => {
+            // Обрезанное фото → в замены задачи (появится в списке для image_map).
+            const r = await api.uploadReplacements(sid, lid, [file]);
+            await loadRepl();
+            setNote(`Обрезка сохранена в замены: ${r.names.join(', ')}`);
+          }}
+        />
+      )}
       {editMedia && (
         <ImageEditModal
           sid={sid} lid={lid} media={editMedia}
@@ -1712,9 +1864,16 @@ function KeitaroUploadPanel({ sid, lid, lander, onChanged }: {
   const [campaign, setCampaign] = useState<{ campaign_url: string; campaign_name: string } | null>(
     ap.campaign_url ? { campaign_url: ap.campaign_url, campaign_name: ap.campaign_name || '' } : null);
   const [campaignBusy, setCampaignBusy] = useState(false);
+  // Авто-кампания при заливке не создалась — причина (иначе падение молчаливое:
+  // шаги прячутся экраном «готово», и видна только старая кнопка).
+  const [campaignError, setCampaignError] = useState('');
   // Варианты задачи AdRobot (Add variant / Move all / Submit for review).
   // Задача определяется НА СЕРВЕРЕ по task_uid самого ленда — в объединённых
   // сессиях вариант не может попасть в чужую задачу.
+  // Ручная привязка: номер оффера вписан руками (ленд залит не через систему).
+  const [manualId, setManualId] = useState<string>('');
+  const [linking, setLinking] = useState(false);
+  const [manualLinked, setManualLinked] = useState<boolean>(!!ap.keitaro_linked_manually);
   const [variantAdded, setVariantAdded] = useState<boolean>(!!ap.variant_added);
   const [variantsMoved, setVariantsMoved] = useState<string>(ap.variants_moved || '');
   const [reviewSent, setReviewSent] = useState<boolean>(!!ap.review_submitted);
@@ -1754,12 +1913,57 @@ function KeitaroUploadPanel({ sid, lid, lander, onChanged }: {
     } finally { setTaskBusy(''); }
   };
 
+  // Привязать существующий оффер по вписанному вручную номеру: система только
+  // проверяет его наличие в Keitaro и берёт название — дальше доступны
+  // тестовая кампания и действия задачи AdRobot.
+  const doLinkManual = async () => {
+    const id = Number((manualId || '').replace(/\D/g, ''));
+    if (!id) { setError('Впиши номер оффера (только цифры)'); return; }
+    setLinking(true); setError('');
+    try {
+      const r = await api.keitaroLinkOffer(sid, lid, id);
+      const changed = renamed?.offer_id !== r.offer_id;
+      setRenamed({ offer_id: r.offer_id, final_name: r.final_name });
+      setManualLinked(true);
+      const patch: Record<string, any> = {
+        keitaro_offer_id: r.offer_id, keitaro_name: r.final_name,
+        keitaro_linked_manually: true,
+      };
+      if (changed) {
+        // Кампания и вариант относились к прежнему id — сбрасываем (бэк тоже).
+        setCampaign(null); setVariantAdded(false);
+        patch.campaign_url = undefined; patch.campaign_name = undefined;
+        patch.variant_added = false;
+      }
+      persist(patch);
+      setManualId('');
+    } catch (e: any) {
+      setError(e.message || 'Не удалось привязать оффер');
+    } finally { setLinking(false); }
+  };
+
+  // Замена архива в уже созданном оффере (правки после заливки).
+  const [updatingArchive, setUpdatingArchive] = useState(false);
+  const [archiveNote, setArchiveNote] = useState('');
+  const doUpdateArchive = async () => {
+    setUpdatingArchive(true); setError(''); setArchiveNote('');
+    try {
+      const r = await api.keitaroUpdateArchive(sid, lid);
+      setArchiveNote(`Архив оффера ${r.offer_id} обновлён (${r.zip})`);
+    } catch (e: any) {
+      setError(e.message || 'Не удалось обновить архив оффера');
+    } finally {
+      setUpdatingArchive(false);
+    }
+  };
+
   const doTestCampaign = async () => {
     setCampaignBusy(true); setError('');
     try {
       const r = await api.testCampaign(sid, lid);
       setCampaign({ campaign_url: r.campaign_url, campaign_name: r.campaign_name });
       persist({ campaign_url: r.campaign_url, campaign_name: r.campaign_name });
+      setCampaignError('');
     } catch (e: any) {
       setError(e.message || 'Не удалось создать тестовую кампанию');
     } finally {
@@ -1787,6 +1991,14 @@ function KeitaroUploadPanel({ sid, lid, lander, onChanged }: {
             // авто-переименование прошло на бэке — сразу экран «готово»
             setRenamed({ offer_id: r.offer_id, final_name: r.final_name });
             persist({ keitaro_offer_id: r.offer_id, keitaro_name: r.final_name });
+            // тестовая кампания создаётся на бэке сразу после оффера
+            if (r.campaign_url) {
+              setCampaign({ campaign_url: r.campaign_url, campaign_name: r.campaign_name || '' });
+              persist({ campaign_url: r.campaign_url, campaign_name: r.campaign_name || '' });
+              setCampaignError('');
+            } else {
+              setCampaignError(r.campaign_error || 'Тестовая кампания не создалась — создай кнопкой ниже');
+            }
           } else {
             // fallback: id не определён однозначно — ручной выбор
             setCreated(r);
@@ -1815,6 +2027,13 @@ function KeitaroUploadPanel({ sid, lid, lander, onChanged }: {
       const r = await api.keitaroRename(sid, lid, selectedId as number, type || undefined, adult);
       setRenamed({ offer_id: r.offer_id, final_name: r.final_name });
       persist({ keitaro_offer_id: r.offer_id, keitaro_name: r.final_name });
+      if (r.campaign_url) {
+        setCampaign({ campaign_url: r.campaign_url, campaign_name: r.campaign_name || '' });
+        persist({ campaign_url: r.campaign_url, campaign_name: r.campaign_name || '' });
+        setCampaignError('');
+      } else {
+        setCampaignError(r.campaign_error || 'Тестовая кампания не создалась — создай кнопкой ниже');
+      }
     } catch (e: any) {
       setError(e.message || 'Ошибка переименования');
     } finally {
@@ -1838,6 +2057,31 @@ function KeitaroUploadPanel({ sid, lid, lander, onChanged }: {
 
       {loading && <p className="dim small" style={{ margin: 0 }}>Собираю план…</p>}
       {error && <div style={{ padding: '0.5rem 0.7rem', background: 'rgba(239,68,68,0.12)', color: '#f87171', borderRadius: 6, fontSize: 12, marginBottom: 8 }}>{error}</div>}
+
+      {/* Ленд залит не через систему (или id известен) — вписываем номер оффера
+          руками, чтобы стали доступны тестовая кампания и вариант в задаче. */}
+      {(!renamed || manualLinked) && (
+        <div style={{ marginBottom: 8, padding: '0.5rem 0.7rem', border: '1px dashed var(--border, #2a2a2a)', borderRadius: 6 }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <span className="dim small">
+              {manualLinked ? 'Привязать другой номер ленда:' : 'Оффер уже есть в Keitaro — номер ленда:'}
+            </span>
+            <input className="form-input" value={manualId} inputMode="numeric"
+                   onChange={(e) => setManualId(e.target.value.replace(/\D/g, ''))}
+                   onKeyDown={(e) => { if (e.key === 'Enter') doLinkManual(); }}
+                   placeholder="напр. 21425" style={{ fontSize: 12, padding: '2px 6px', width: 120 }} />
+            <button className="btn" onClick={doLinkManual} disabled={linking || !manualId}
+                    style={{ fontSize: 12 }}>
+              {linking ? 'Проверяю в Keitaro…' : <><Icon name="link" size={13} /> Привязать</>}
+            </button>
+          </div>
+          <OfferNamesHint idsText={manualId} compact />
+          <div className="dim small" style={{ marginTop: 4 }}>
+            Ничего не создаётся и не переименовывается — система только сверит номер с Keitaro
+            и откроет тестовую кампанию + «Добавить вариант» в задачу.
+          </div>
+        </div>
+      )}
 
       {plan && !created && !renamed && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -1935,16 +2179,25 @@ function KeitaroUploadPanel({ sid, lid, lander, onChanged }: {
       {renamed && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           <div style={{ padding: '0.6rem 0.8rem', background: 'rgba(74,222,128,0.12)', color: '#4ade80', borderRadius: 6, fontSize: 13 }}>
-            Готово: оффер <b>id {renamed.offer_id}</b> создан и переименован.<br />
+            {manualLinked
+              ? <>Оффер <b>id {renamed.offer_id}</b> привязан вручную (в Keitaro ничего не менялось).</>
+              : <>Готово: оффер <b>id {renamed.offer_id}</b> создан и переименован.</>}<br />
             <code style={{ color: 'var(--text)' }}>{renamed.final_name}</code>
           </div>
           {/* Тестовая кампания: test mch <имя>, группа Andrei AM → ссылка */}
           {!campaign && (
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              <button className="btn btn-primary" onClick={doTestCampaign} disabled={campaignBusy} style={{ fontSize: 13 }}>
-                {campaignBusy ? 'Создаю тестовую кампанию…' : <><Icon name="flask" size={13} /> Создать тестовую кампанию</>}
-              </button>
-              {campaignBusy && <span className="dim small">кампании создаются ~30-60с</span>}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {campaignError && (
+                <div style={{ padding: '0.5rem 0.7rem', background: 'rgba(232,168,87,0.14)', color: 'var(--warning, #e8a857)', borderRadius: 6, fontSize: 12 }}>
+                  <Icon name="alert" size={12} /> Авто-кампания не создалась: {campaignError}
+                </div>
+              )}
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <button className="btn btn-primary" onClick={doTestCampaign} disabled={campaignBusy} style={{ fontSize: 13 }}>
+                  {campaignBusy ? 'Создаю тестовую кампанию…' : <><Icon name="flask" size={13} /> Создать тестовую кампанию</>}
+                </button>
+                {campaignBusy && <span className="dim small">кампании создаются ~30-60с</span>}
+              </div>
             </div>
           )}
           {campaign && (
@@ -1999,8 +2252,15 @@ function KeitaroUploadPanel({ sid, lid, lander, onChanged }: {
               </>
             )}
           </div>
-          <div>
-            <button className="btn" style={{ fontSize: 12 }} disabled={uploading || campaignBusy}
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            {/* Правки после заливки: заменить архив в ТОМ ЖЕ оффере */}
+            <button className="btn" style={{ fontSize: 12 }} disabled={updatingArchive || uploading || campaignBusy}
+                    onClick={doUpdateArchive}
+                    title="Загрузить текущий (правленый) архив в уже созданный оффер — название/группа/страна не меняются">
+              {updatingArchive ? 'Обновляю ленд в оффере…' : <><Icon name="upload" size={13} /> Обновить ленд в оффере</>}
+            </button>
+            {archiveNote && <span className="small" style={{ color: '#4ade80' }}>{archiveNote}</span>}
+            <button className="btn" style={{ fontSize: 12 }} disabled={uploading || campaignBusy || updatingArchive}
                     onClick={() => { setRenamed(null); setCampaign(null); loadPlan(type); }}>
               ↻ Залить заново (новый оффер)
             </button>
@@ -2008,6 +2268,246 @@ function KeitaroUploadPanel({ sid, lid, lander, onChanged }: {
         </div>
       )}
     </div>
+  );
+}
+
+// ── Массовая заливка всех лендов сессии + круговой прогресс ─────────────
+function stageColor(stage: string): string {
+  if (stage === 'done') return '#4ade80';
+  if (stage === 'error') return '#f87171';
+  if (stage === 'needs_id') return '#f59e0b';
+  if (stage === 'uploading') return 'var(--accent, #7c6fff)';
+  if (stage === 'cancelled') return '#64748b';
+  return '#94a3b8';
+}
+
+function stageLabel(stage: string): string {
+  if (stage === 'done') return 'готово';
+  if (stage === 'error') return 'ошибка';
+  if (stage === 'needs_id') return 'нужен id';
+  if (stage === 'uploading') return 'заливаю';
+  if (stage === 'cancelled') return 'отменён';
+  return 'в очереди';
+}
+
+function BulkUploadPanel({ sid, onFinished }: { sid: string; onFinished?: () => void }) {
+  const [st, setSt] = useState<BulkUploadStatus | null>(null);
+  const [open, setOpen] = useState(false);
+  const [starting, setStarting] = useState(false);
+  const [stopping, setStopping] = useState(false);
+  const [err, setErr] = useState('');
+  const timer = useRef<any>(null);
+  const wasRunning = useRef(false);
+
+  const stop = () => { if (timer.current) { clearInterval(timer.current); timer.current = null; } };
+  const poll = async () => {
+    try {
+      const s = await api.bulkUploadStatus(sid);
+      setSt(s);
+      if (!s.running) {
+        stop();
+        if (wasRunning.current) { wasRunning.current = false; onFinished?.(); }
+      } else {
+        wasRunning.current = true;
+      }
+    } catch { /* транзиентная ошибка поллинга — молчим */ }
+  };
+  const ensure = () => { if (!timer.current) timer.current = setInterval(poll, 2500); };
+
+  useEffect(() => {
+    poll().then(() => { /* если заливка уже шла (F5) — продолжаем следить */ });
+    return stop;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sid]);
+  useEffect(() => { if (st?.running) ensure(); /* eslint-disable-next-line */ }, [st?.running]);
+
+  const start = async () => {
+    setStarting(true); setErr('');
+    try {
+      const s = await api.bulkUploadStart(sid);
+      wasRunning.current = true;
+      setSt(s); setOpen(true); ensure();
+    } catch (e: any) {
+      setErr(e.message || 'Не удалось запустить заливку');
+    } finally {
+      setStarting(false);
+    }
+  };
+
+  const stopAll = async () => {
+    setStopping(true); setErr('');
+    try {
+      setSt(await api.bulkUploadStop(sid));
+    } catch (e: any) {
+      setErr(e.message || 'Не удалось остановить заливку');
+    } finally {
+      setStopping(false);
+    }
+  };
+
+  const total = st?.total || 0;
+  const done = st?.done || 0;
+  // Кольцо заполняется ПО ШАГАМ заливки (выбираю сеть → страну → создаю…),
+  // а не рывками по завершённым лендам. Доля считается на бэке; если её нет
+  // в ответе — собираем из пошагового прогресса лендов, и только в последнюю
+  // очередь откатываемся на «сколько лендов готово» (старое поведение).
+  const items = st?.items || [];
+  const pct = st?.progress
+    ?? (items.length ? items.reduce((s, i) => s + (i.progress || 0), 0) / items.length
+                     : (total ? done / total : 0));
+  const anyError = items.some((i) => i.stage === 'error');
+  const anyCancelled = items.some((i) => i.stage === 'cancelled');
+  const allDone = total > 0 && !st?.running && done >= total;
+  const R = 8.5, C = 2 * Math.PI * R;
+  // Прерванную заливку не красим зелёным «всё готово» — она осталась неполной.
+  const ringColor = anyError ? '#f87171' : anyCancelled ? '#64748b'
+    : allDone ? '#4ade80' : 'var(--accent, #7c6fff)';
+  // Что происходит прямо сейчас — рядом с кольцом, чтобы не открывать список.
+  const current = items.find((i) => i.stage === 'uploading');
+
+  return (
+    <div style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 8 }}>
+      <button className="btn" style={{ fontSize: 12 }} disabled={starting || !!st?.running} onClick={start}
+              title="Залить в Keitaro все готовые (и ещё не залитые) ленды сессии: оффер → id → тестовая кампания">
+        {starting ? 'Запускаю…' : st?.running ? 'Заливаются…' : <><Icon name="upload" size={13} /> Залить все ленды</>}
+      </button>
+      {st?.running && (
+        <button className="btn" style={{ fontSize: 12, color: '#f87171', borderColor: '#f87171' }}
+                disabled={stopping || st?.cancelling} onClick={stopAll}
+                title="Остановить заливку: текущий ленд дозальётся до конца (обрыв на полушаге оставил бы в Keitaro недоделанный оффер), остальные из очереди отменятся">
+          {st?.cancelling || stopping ? 'Останавливаю…' : <><Icon name="x" size={13} /> Прервать</>}
+        </button>
+      )}
+      {/* круговой прогресс: клик — раскрыть список заливок */}
+      {total > 0 && (
+        <button onClick={() => setOpen((v) => !v)} title={`Прогресс по шагам: ${Math.round(pct * 100)}% · лендов залито ${done}/${total} — клик для деталей`}
+                style={{ border: 'none', background: 'transparent', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5, padding: 0 }}>
+          <svg width="24" height="24" viewBox="0 0 24 24" style={{ transform: 'rotate(-90deg)' }}>
+            <circle cx="12" cy="12" r={R} fill="none" stroke="var(--border, #2a2a2a)" strokeWidth="3" />
+            <circle cx="12" cy="12" r={R} fill="none" stroke={ringColor} strokeWidth="3"
+                    strokeDasharray={C} strokeDashoffset={C * (1 - pct)} strokeLinecap="round"
+                    style={{ transition: 'stroke-dashoffset 0.4s' }} />
+          </svg>
+          {/* Проценты числом: на дуге в 24px шаг внутри одного ленда почти не
+              виден, и прогресс читался как «двигается только по лендам». */}
+          <span style={{ fontFamily: 'monospace', fontSize: 12, color: ringColor, minWidth: 34, textAlign: 'right' }}>
+            {Math.round(pct * 100)}%
+          </span>
+          <span className="dim small" style={{ fontFamily: 'monospace' }}>{done}/{total}</span>
+        </button>
+      )}
+      {current?.step && (
+        <span className="dim small" style={{ maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+              title={`${current.name}: ${current.step}`}>{current.step}</span>
+      )}
+      {st?.cancelling && (
+        <span className="small" style={{ color: '#f59e0b' }}>останавливаюсь после текущего ленда</span>
+      )}
+      {err && <span className="small" style={{ color: '#f87171' }}>{err}</span>}
+
+      {/* выпадающий список заливок: статус каждого ленда + ссылки на тесты */}
+      {open && total > 0 && (
+        <div style={{ position: 'absolute', top: 'calc(100% + 6px)', right: 0, zIndex: 900, width: 430, maxHeight: 380, overflowY: 'auto', background: 'var(--bg-elevated, #141414)', border: '1px solid var(--border, #2a2a2a)', borderRadius: 10, boxShadow: '0 8px 30px rgba(0,0,0,0.45)', padding: '0.5rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0.2rem 0.4rem 0.5rem' }}>
+            <span style={{ fontSize: 12, fontWeight: 600 }}>Заливка лендов ({done}/{total})</span>
+            {st?.running && <span className="dim small">идёт…</span>}
+            <div style={{ flex: 1 }} />
+            <button className="btn" style={{ fontSize: 11 }} onClick={() => setOpen(false)}>✕</button>
+          </div>
+          {(st?.items || []).map((it) => (
+            <div key={it.lid} style={{ padding: '0.45rem 0.4rem', borderTop: '1px solid var(--border, #2a2a2a)', display: 'flex', flexDirection: 'column', gap: 3 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ width: 8, height: 8, borderRadius: 999, flexShrink: 0, background: stageColor(it.stage) }} />
+                <span className="mono" style={{ fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.name}</span>
+                <span className="small" style={{ marginLeft: 'auto', color: stageColor(it.stage), whiteSpace: 'nowrap' }}>{stageLabel(it.stage)}</span>
+              </div>
+              {it.stage === 'uploading' && (
+                <div style={{ paddingLeft: 16, display: 'flex', flexDirection: 'column', gap: 3 }}>
+                  {it.step && <span className="dim small">{it.step}</span>}
+                  {/* полоска по шагам этого ленда — видно, что процесс идёт */}
+                  <div style={{ height: 3, borderRadius: 3, background: 'var(--border, #2a2a2a)', overflow: 'hidden' }}>
+                    <div style={{ height: '100%', width: `${Math.round((it.progress || 0) * 100)}%`,
+                                  background: 'var(--accent, #7c6fff)', transition: 'width 0.4s' }} />
+                  </div>
+                </div>
+              )}
+              {it.error && <div className="small" style={{ paddingLeft: 16, color: '#f87171' }}>{it.error}</div>}
+              {it.stage === 'needs_id' && (
+                <div className="small" style={{ paddingLeft: 16, color: '#f59e0b' }}>Оффер создан, но id не определился — подтверди в панели ленда</div>
+              )}
+              {it.offer_id && (
+                <div className="small" style={{ paddingLeft: 16, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <span className="mono dim">KT {it.offer_id}</span>
+                  {it.campaign_url ? (
+                    <a className="btn btn-primary" href={it.campaign_url} target="_blank" rel="noopener"
+                       style={{ fontSize: 11, textDecoration: 'none' }}>
+                      <Icon name="external" size={11} /> Тестовый сайт
+                    </a>
+                  ) : it.stage === 'done' ? <span className="dim">кампания не создана</span> : null}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// «…»-меню действий ленда в списке слева (переименовать/дублировать/переустановить/удалить).
+function LanderRowMenu({ canReinstall, onRename, onDuplicate, onReinstall, onRemove }: {
+  canReinstall: boolean;
+  onRename: () => void; onDuplicate: () => void; onReinstall: () => void; onRemove: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
+
+  const toggle = () => {
+    if (!open && btnRef.current) {
+      const r = btnRef.current.getBoundingClientRect();
+      // position:fixed — меню не обрезается скролл-контейнером списка лендов
+      setPos({ top: r.bottom + 4, left: Math.max(8, r.right - 190) });
+    }
+    setOpen((v) => !v);
+  };
+
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: PointerEvent) => {
+      if (btnRef.current && btnRef.current.contains(e.target as Node)) return;
+      setOpen(false);
+    };
+    document.addEventListener('pointerdown', close);
+    return () => document.removeEventListener('pointerdown', close);
+  }, [open]);
+
+  const Item = ({ label, icon, danger, onClick }: { label: string; icon: string; danger?: boolean; onClick: () => void }) => (
+    <button
+      onPointerDown={(e) => { e.preventDefault(); e.stopPropagation(); setOpen(false); onClick(); }}
+      style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '0.45rem 0.7rem', border: 'none', cursor: 'pointer', background: 'transparent', color: danger ? '#f87171' : 'var(--text)', fontSize: 12, textAlign: 'left' }}
+      onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--accent-soft, rgba(124,111,255,0.12))'; }}
+      onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
+    >
+      <Icon name={icon} size={13} /> {label}
+    </button>
+  );
+
+  return (
+    <>
+      <button ref={btnRef} className="lander-del" onClick={toggle} title="Действия с лендом" aria-label="Действия с лендом"
+              style={{ flexShrink: 0, width: 26, border: 'none', cursor: 'pointer', background: 'transparent', color: 'var(--text-muted)', fontSize: 13, lineHeight: 1 }}>
+        <Icon name="dots" size={14} />
+      </button>
+      {open && pos && (
+        <div style={{ position: 'fixed', top: pos.top, left: pos.left, zIndex: 1200, width: 190, background: 'var(--bg-elevated, #141414)', border: '1px solid var(--border, #2a2a2a)', borderRadius: 8, boxShadow: '0 8px 30px rgba(0,0,0,0.45)', overflow: 'hidden', padding: '0.2rem 0' }}>
+          <Item label="Переименовать" icon="edit" onClick={onRename} />
+          <Item label="Дублировать" icon="copy" onClick={onDuplicate} />
+          {canReinstall && <Item label="Переустановить" icon="refresh" onClick={onReinstall} />}
+          <Item label="Удалить из сессии" icon="x" danger onClick={onRemove} />
+        </div>
+      )}
+    </>
   );
 }
 
@@ -2236,6 +2736,8 @@ export function SessionDetailPage() {
           </span>
         )}
         <div style={{ flex: 1 }} />
+        {/* Массовая заливка всех лендов + круговой прогресс/ссылки на тесты */}
+        <BulkUploadPanel sid={sid} onFinished={load} />
         {taskRefs.length > 0 && (
           <button className="btn" style={{ fontSize: 12 }} onClick={() => setShowTaskDetails(true)}
                   title="Полная карточка задачи (для объединённых — вкладки по задачам)">
@@ -2306,56 +2808,14 @@ export function SessionDetailPage() {
                       </span>
                     )}
                   </button>
-                  <button
-                    className="lander-del"
-                    onClick={() => renameLander(l)}
-                    title="Переименовать ленд"
-                    aria-label="Переименовать ленд"
-                    style={{
-                      flexShrink: 0, width: 24, border: 'none', cursor: 'pointer',
-                      background: 'transparent', color: 'var(--text-muted)', fontSize: 12, lineHeight: 1,
-                    }}
-                  >
-                    ✎
-                  </button>
-                  <button
-                    className="lander-del"
-                    onClick={() => duplicateLander(l.lander_id)}
-                    title="Дублировать ленд (копия архивов, параметров и правок)"
-                    aria-label="Дублировать ленд"
-                    style={{
-                      flexShrink: 0, width: 24, border: 'none', cursor: 'pointer',
-                      background: 'transparent', color: 'var(--text-muted)', fontSize: 12, lineHeight: 1,
-                    }}
-                  >
-                    ⧉
-                  </button>
-                  {/^\d{4,5}$/.test(l.lander_id) && (
-                    <button
-                      className="lander-del"
-                      onClick={() => reinstallLander(l.lander_id)}
-                      title="Переустановить ленд: стереть всё и скачать первоначальный из Keitaro"
-                      aria-label="Переустановить ленд"
-                      style={{
-                        flexShrink: 0, width: 24, border: 'none', cursor: 'pointer',
-                        background: 'transparent', color: 'var(--text-muted)', fontSize: 13, lineHeight: 1,
-                      }}
-                    >
-                      ↻
-                    </button>
-                  )}
-                  <button
-                    className="lander-del"
-                    onClick={() => removeLander(l.lander_id)}
-                    title="Удалить ленд из сессии"
-                    aria-label="Удалить ленд"
-                    style={{
-                      flexShrink: 0, width: 28, border: 'none', cursor: 'pointer',
-                      background: 'transparent', color: 'var(--text-muted)', fontSize: 15, lineHeight: 1,
-                    }}
-                  >
-                    ×
-                  </button>
+                  {/* все действия ленда — в «…»-меню (вкладка стала чище) */}
+                  <LanderRowMenu
+                    canReinstall={/^\d{4,5}$/.test(l.lander_id)}
+                    onRename={() => renameLander(l)}
+                    onDuplicate={() => duplicateLander(l.lander_id)}
+                    onReinstall={() => reinstallLander(l.lander_id)}
+                    onRemove={() => removeLander(l.lander_id)}
+                  />
                 </div>
               );
             })}

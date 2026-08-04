@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import CodeMirror, { type ReactCodeMirrorRef } from '@uiw/react-codemirror';
 import { EditorView } from '@codemirror/view';
 import { EditorState } from '@codemirror/state';
-import { openSearchPanel } from '@codemirror/search';
+import { SearchQuery, setSearchQuery, findNext, findPrevious, replaceNext, replaceAll, search } from '@codemirror/search';
+import { api } from '../lib/api';
 import { oneDark } from '@codemirror/theme-one-dark';
 import { html } from '@codemirror/lang-html';
 import { css as cssLang } from '@codemirror/lang-css';
@@ -228,7 +229,14 @@ function collectRules(el: Element, doc: Document): { rules: RuleView[]; refs: Ma
 
 // ---------------------------------------------------------------------------
 
-export function LanderEditor({ zipName }: { zipName: string }) {
+export function LanderEditor({ zipName, contentVersion = 0 }: {
+  zipName: string;
+  /** Бампается снаружи, когда архив ленда изменили НЕ из редактора (перевод,
+   *  адаптация, нейро-правка, откат версии) — редактор перечитывает файлы с
+   *  диска, иначе показывал бы свои старые буферы (кейс: после перевода в
+   *  коде оставался дореводный текст). */
+  contentVersion?: number;
+}) {
   const [ver, setVer] = useState(0);
   const [files, setFiles] = useState<string[]>([]);
   const [buffers, setBuffers] = useState<Record<string, { text: string; saved: string }>>({});
@@ -271,6 +279,8 @@ export function LanderEditor({ zipName }: { zipName: string }) {
   }, []);
 
   // ---- файлы ----------------------------------------------------------------
+  // contentVersion в зависимостях: после перевода/адаптации состав файлов мог
+  // измениться (переименования html→php, новые ассеты).
   useEffect(() => {
     let dead = false;
     fetch(`/api/preview/${encodeURIComponent(zipName)}/files`)
@@ -282,7 +292,7 @@ export function LanderEditor({ zipName }: { zipName: string }) {
       })
       .catch((e) => !dead && flash(`Список файлов: ${e.message}`));
     return () => { dead = true; };
-  }, [zipName, flash]);
+  }, [zipName, flash, contentVersion]);
 
   const fetchFile = useCallback(async (path: string): Promise<string> => {
     const r = await fetch(`/api/preview/${encodeURIComponent(zipName)}/file?path=${encodeURIComponent(path)}&raw=1`);
@@ -307,6 +317,48 @@ export function LanderEditor({ zipName }: { zipName: string }) {
   useEffect(() => {
     if (files.length && !activePath) void openFile(entryFile);
   }, [files, activePath, entryFile, openFile]);
+
+  // ---- перечитывание с диска ------------------------------------------------
+  // Буферы в ref — чтобы reloadFromDisk не пересоздавался на каждый набранный
+  // символ (иначе эффект перезагрузки срабатывал бы во время печати).
+  const buffersRef = useRef(buffers);
+  buffersRef.current = buffers;
+
+  /** Перечитывает открытые файлы из архива. Несохранённые правки НЕ затирает —
+   *  такие буферы остаются как есть, о чём сообщаем. */
+  const reloadFromDisk = useCallback(async (note?: string) => {
+    const paths = Object.keys(buffersRef.current);
+    const dirty: string[] = [];
+    const fresh: Record<string, { text: string; saved: string }> = {};
+    const gone: string[] = [];
+    for (const p of paths) {
+      const b = buffersRef.current[p];
+      if (b.text !== b.saved) { dirty.push(p); continue; }
+      try {
+        const text = await fetchFile(p);
+        fresh[p] = { text, saved: text };
+      } catch {
+        gone.push(p);   // файл исчез (переадаптация/переименование)
+      }
+    }
+    setBuffers((b) => {
+      const next = { ...b, ...fresh };
+      for (const p of gone) delete next[p];
+      return next;
+    });
+    setVer((v) => v + 1);   // перерисовать превью
+    if (dirty.length) flash(`Обновлено с диска; несохранённые правки сохранены только у: ${dirty.join(', ')}`);
+    else flash(note || '✓ Файлы перечитаны из архива');
+  }, [fetchFile, flash]);
+
+  // Архив изменили снаружи (перевод / адаптация / нейро / откат версии) —
+  // подтягиваем актуальный код, иначе в редакторе висел бы старый текст.
+  const seenContentVer = useRef(contentVersion);
+  useEffect(() => {
+    if (contentVersion === seenContentVer.current) return;
+    seenContentVer.current = contentVersion;
+    void reloadFromDisk('✓ Ленд изменился — код обновлён');
+  }, [contentVersion, reloadFromDisk]);
 
   // ---- сохранение -----------------------------------------------------------
   const saveFile = useCallback(async (path: string, content: string) => {
@@ -335,13 +387,19 @@ export function LanderEditor({ zipName }: { zipName: string }) {
     if (activePath && buf && buf.text !== buf.saved) void saveFile(activePath, buf.text);
   }, [activePath, buf, saveFile]);
 
-  // Ctrl/Cmd+S
+  // Ctrl/Cmd+S — сохранить, Ctrl/Cmd+F — наша панель поиска (не браузерная).
   const onKeyDown = useCallback((e: React.KeyboardEvent) => {
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
       e.preventDefault();
       saveActive();
     }
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+      e.preventDefault();
+      showSearchRef.current?.();
+    }
   }, [saveActive]);
+  // showSearch объявляется ниже — через ref, чтобы не плодить зависимости.
+  const showSearchRef = useRef<(() => void) | null>(null);
 
   // ---- переход к коду ---------------------------------------------------------
   const applyJump = useCallback(() => {
@@ -540,30 +598,147 @@ export function LanderEditor({ zipName }: { zipName: string }) {
   const pickByEl = useCallback((el: Element | undefined) => { if (el) doPick(el); }, [doPick]);
 
   // ---- ресайз сплита -----------------------------------------------------------
-  const startSplit = useCallback((e: React.MouseEvent) => {
+  // Pointer capture: мышь над iframe (другой документ) не отдаёт mouseup окну —
+  // ручка «прилипала» к курсору. Пока тянем, iframe не принимает события.
+  const [splitting, setSplitting] = useState(false);
+  const startSplit = useCallback((e: React.PointerEvent) => {
     e.preventDefault();
     const root = rootRef.current;
+    const handle = e.currentTarget as HTMLElement;
     if (!root) return;
-    const move = (ev: MouseEvent) => {
-      const r = root.getBoundingClientRect();
-      setSplitPct(Math.min(75, Math.max(20, ((ev.clientX - r.left) / r.width) * 100)));
+    try { handle.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+    setSplitting(true);
+    let raf = 0;
+    const move = (ev: PointerEvent) => {
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        const r = root.getBoundingClientRect();
+        setSplitPct(Math.min(75, Math.max(20, ((ev.clientX - r.left) / r.width) * 100)));
+      });
     };
     const up = () => {
-      window.removeEventListener('mousemove', move);
-      window.removeEventListener('mouseup', up);
+      handle.removeEventListener('pointermove', move);
+      handle.removeEventListener('pointerup', up);
+      handle.removeEventListener('pointercancel', up);
+      if (raf) cancelAnimationFrame(raf);
+      setSplitting(false);
+      document.body.style.userSelect = '';
     };
-    window.addEventListener('mousemove', move);
-    window.addEventListener('mouseup', up);
+    handle.addEventListener('pointermove', move);
+    handle.addEventListener('pointerup', up);
+    handle.addEventListener('pointercancel', up);
+    document.body.style.userSelect = 'none';
   }, []);
 
   const extensions = useMemo(
-    () => [...langFor(activePath), EditorView.lineWrapping, RU_PHRASES],
+    // search() нужен для setSearchQuery/подсветки совпадений нашей панели
+    () => [...langFor(activePath), EditorView.lineWrapping, RU_PHRASES, search()],
     [activePath]);
 
-  const showSearch = useCallback(() => {
+  // ---- поиск (собственная панель в стиле VS Code) ------------------------------
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [findText, setFindText] = useState('');
+  const [replText, setReplText] = useState('');
+  const [showRepl, setShowRepl] = useState(false);
+  const [caseSens, setCaseSens] = useState(false);
+  const [wholeWord, setWholeWord] = useState(false);
+  const [useRegexp, setUseRegexp] = useState(false);
+  const [matchInfo, setMatchInfo] = useState<{ count: number; current: number }>({ count: 0, current: 0 });
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  const buildQuery = useCallback(() => new SearchQuery({
+    search: findText, replace: replText,
+    caseSensitive: caseSens, wholeWord, regexp: useRegexp,
+  }), [findText, replText, caseSens, wholeWord, useRegexp]);
+
+  // Публикуем запрос в CodeMirror (подсветка всех совпадений) + счётчик.
+  useEffect(() => {
     const view = cmRef.current?.view;
-    if (view) { openSearchPanel(view); view.focus(); }
+    if (!view) return;
+    const q = buildQuery();
+    view.dispatch({ effects: setSearchQuery.of(q) });
+    if (!searchOpen || !findText) { setMatchInfo({ count: 0, current: 0 }); return; }
+    try {
+      let count = 0, current = 0;
+      const selFrom = view.state.selection.main.from;
+      const cur = q.getCursor(view.state.doc);
+      while (true) {
+        const n = cur.next();
+        if (n.done) break;
+        count++;
+        if (n.value.from <= selFrom) current = count;
+        if (count > 9999) break; // предохранитель на огромных файлах
+      }
+      setMatchInfo({ count, current });
+    } catch { setMatchInfo({ count: 0, current: 0 }); }
+    // buf?.text в зависимостях: правки текста обновляют счётчик
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchOpen, findText, caseSens, wholeWord, useRegexp, activePath, buf?.text]);
+
+  const doFind = useCallback((dir: 'next' | 'prev') => {
+    const view = cmRef.current?.view;
+    if (!view || !findText) return;
+    view.dispatch({ effects: setSearchQuery.of(buildQuery()) });
+    (dir === 'next' ? findNext : findPrevious)(view);
+    // после перехода пересчитать «текущий»
+    setTimeout(() => {
+      const v = cmRef.current?.view;
+      if (!v) return;
+      try {
+        const q = buildQuery();
+        let count = 0, current = 0;
+        const selFrom = v.state.selection.main.from;
+        const cur = q.getCursor(v.state.doc);
+        while (true) {
+          const n = cur.next();
+          if (n.done) break;
+          count++;
+          if (n.value.from <= selFrom) current = count;
+        }
+        setMatchInfo({ count, current });
+      } catch { /* ignore */ }
+    }, 30);
+  }, [findText, buildQuery]);
+
+  const doReplace = useCallback((all: boolean) => {
+    const view = cmRef.current?.view;
+    if (!view || !findText) return;
+    view.dispatch({ effects: setSearchQuery.of(buildQuery()) });
+    (all ? replaceAll : replaceNext)(view);
+    // текст изменился — синхронизируем буфер (onChange CodeMirror это сделает сам)
+  }, [findText, buildQuery]);
+
+  const showSearch = useCallback(() => {
+    setSearchOpen(true);
+    setTimeout(() => searchInputRef.current?.focus(), 30);
   }, []);
+  showSearchRef.current = showSearch;
+
+  // ---- переименование файла ----------------------------------------------------
+  const renameActive = useCallback(async () => {
+    if (!activePath) return;
+    const oldName = activePath.split('/').pop() || activePath;
+    const name = prompt('Новое имя файла (ссылки в коде обновятся):', oldName);
+    if (!name || name.trim() === oldName) return;
+    try {
+      const r = await api.previewRenameFile(zipName, activePath, name.trim());
+      // буферы: старый путь убрать, список перечитать, открыть новый путь
+      setBuffers((b) => {
+        const nb = { ...b };
+        delete nb[activePath];
+        return nb;
+      });
+      const list = await fetch(`/api/preview/${encodeURIComponent(zipName)}/files`).then((x) => x.json());
+      setFiles(list.map((f: { path: string }) => f.path).filter((p: string) => TEXT_EXTS.has(extOf(p))));
+      setActivePath('');
+      setVer((v) => v + 1);
+      void openFile(r.path);
+      flash(`✓ Переименовано: ${oldName} → ${name.trim()}${r.refs_updated ? ` (ссылок обновлено: ${r.refs_updated})` : ''}`);
+    } catch (e: any) {
+      flash(`Переименование: ${e.message}`);
+    }
+  }, [activePath, zipName, openFile, flash]);
 
   // ---- UI ----------------------------------------------------------------------
   const border = '1px solid var(--border, #2a2a2a)';
@@ -585,9 +760,17 @@ export function LanderEditor({ zipName }: { zipName: string }) {
             <option key={f} value={f}>{buffers[f] && buffers[f].text !== buffers[f].saved ? '● ' : ''}{f}</option>
           ))}
         </select>
+        <button className="btn" onClick={renameActive} disabled={!activePath} style={{ fontSize: 12 }}
+                title="Переименовать текущий файл (ссылки в коде обновятся)">
+          <Icon name="edit" size={13} />
+        </button>
         <button className="btn" onClick={showSearch} disabled={!buf} style={{ fontSize: 12 }}
                 title="Поиск и замена в коде (Ctrl+F)">
           <Icon name="search" size={13} /> Поиск
+        </button>
+        <button className="btn" onClick={() => void reloadFromDisk()} style={{ fontSize: 12 }}
+                title="Перечитать файлы из архива (несохранённые правки останутся)">
+          <Icon name="refresh" size={13} />
         </button>
         <button className="btn" onClick={saveActive} disabled={saving || !buf || buf.text === buf.saved}
                 style={{ fontSize: 12 }} title="Ctrl+S">
@@ -610,18 +793,82 @@ export function LanderEditor({ zipName }: { zipName: string }) {
             key={`${zipName}-${ver}`}
             src={previewUrl}
             onLoad={onFrameLoad}
-            style={{ width: '100%', height: '100%', border: 'none', display: 'block' }}
+            style={{ width: '100%', height: '100%', border: 'none', display: 'block', pointerEvents: splitting ? 'none' : 'auto' }}
             title="lander-editor-preview"
           />
         </div>
         {/* ручка */}
-        <div onMouseDown={startSplit} title="Тяни, чтобы менять пропорции"
-             style={{ width: 10, cursor: 'ew-resize', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-          <div style={{ width: 3, height: 42, borderRadius: 3, background: 'var(--accent)', opacity: 0.6 }} />
+        <div onPointerDown={startSplit} title="Тяни, чтобы менять пропорции"
+             style={{ width: 10, cursor: 'ew-resize', touchAction: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+          <div style={{ width: 3, height: 42, borderRadius: 3, background: 'var(--accent)', opacity: splitting ? 1 : 0.6 }} />
         </div>
         {/* правая колонка: код + панель стилей */}
         <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
-          <div style={{ flex: `1 1 ${100 - (picked ? panelH : 0)}%`, minHeight: 0, border, borderRadius: 8, overflow: 'hidden' }}>
+          <div style={{ position: 'relative', flex: `1 1 ${100 - (picked ? panelH : 0)}%`, minHeight: 0, border, borderRadius: 8, overflow: 'hidden' }}>
+            {/* Панель поиска в стиле VS Code: плавает сверху-справа над кодом,
+                живёт, пока её явно не закроют (✕ или Esc) — не сбрасывается
+                ни после замены, ни после сохранения, ни при смене файла. */}
+            {searchOpen && (
+              <div style={{ position: 'absolute', top: 6, right: 14, zIndex: 20,
+                            background: 'var(--bg-elevated, #141414)', border, borderRadius: 8,
+                            boxShadow: '0 6px 24px rgba(0,0,0,0.45)', padding: 6,
+                            display: 'flex', flexDirection: 'column', gap: 4, width: 380 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <button className="btn" onClick={() => setShowRepl((v) => !v)} title="Показать замену"
+                          style={{ fontSize: 10, padding: '2px 5px' }}>{showRepl ? '▾' : '▸'}</button>
+                  <input
+                    ref={searchInputRef}
+                    className="form-input"
+                    value={findText}
+                    placeholder="Найти"
+                    onChange={(e) => setFindText(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') { e.preventDefault(); doFind(e.shiftKey ? 'prev' : 'next'); }
+                      if (e.key === 'Escape') { e.preventDefault(); setSearchOpen(false); cmRef.current?.view?.focus(); }
+                    }}
+                    style={{ flex: 1, fontSize: 12, padding: '3px 8px', fontFamily: 'monospace' }}
+                  />
+                  <span className="dim" style={{ fontSize: 11, fontFamily: 'monospace', whiteSpace: 'nowrap', minWidth: 52, textAlign: 'center' }}>
+                    {findText ? (matchInfo.count ? `${matchInfo.current || 1}/${matchInfo.count}` : 'нет') : ''}
+                  </span>
+                  {([
+                    ['Aa', caseSens, () => setCaseSens((v) => !v), 'С учётом регистра'],
+                    ['|ab|', wholeWord, () => setWholeWord((v) => !v), 'Слово целиком'],
+                    ['.*', useRegexp, () => setUseRegexp((v) => !v), 'Регулярное выражение'],
+                  ] as const).map(([lbl, on, toggle, title]) => (
+                    <button key={lbl} onClick={toggle} title={title}
+                            style={{ fontSize: 10, fontFamily: 'monospace', padding: '3px 5px', borderRadius: 4, cursor: 'pointer',
+                                     border: `1px solid ${on ? 'var(--accent)' : 'var(--border, #2a2a2a)'}`,
+                                     background: on ? 'var(--accent-soft, rgba(124,111,255,0.2))' : 'transparent',
+                                     color: on ? 'var(--accent)' : 'var(--text-muted)' }}>
+                      {lbl}
+                    </button>
+                  ))}
+                  <button className="btn" style={{ fontSize: 11, padding: '2px 6px' }} title="Предыдущее (Shift+Enter)"
+                          onClick={() => doFind('prev')} disabled={!findText}>↑</button>
+                  <button className="btn" style={{ fontSize: 11, padding: '2px 6px' }} title="Следующее (Enter)"
+                          onClick={() => doFind('next')} disabled={!findText}>↓</button>
+                  <button className="btn" style={{ fontSize: 11, padding: '2px 6px' }} title="Закрыть (Esc)"
+                          onClick={() => { setSearchOpen(false); cmRef.current?.view?.focus(); }}>✕</button>
+                </div>
+                {showRepl && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 4, paddingLeft: 26 }}>
+                    <input
+                      className="form-input"
+                      value={replText}
+                      placeholder="Заменить на"
+                      onChange={(e) => setReplText(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); doReplace(false); } }}
+                      style={{ flex: 1, fontSize: 12, padding: '3px 8px', fontFamily: 'monospace' }}
+                    />
+                    <button className="btn" style={{ fontSize: 11 }} onClick={() => doReplace(false)}
+                            disabled={!findText} title="Заменить текущее">Заменить</button>
+                    <button className="btn" style={{ fontSize: 11 }} onClick={() => doReplace(true)}
+                            disabled={!findText} title="Заменить все совпадения">Все</button>
+                  </div>
+                )}
+              </div>
+            )}
             {buf ? (
               <CodeMirror
                 ref={cmRef}
@@ -733,15 +980,32 @@ function StyleCard({ title, media, source, value, onChange, onSave, onJump, plac
   return (
     // flexShrink: 0 — карточки лежат в скролл-колонке, без этого сжимаются друг в друга
     <div style={{ border, borderRadius: 6, overflow: 'hidden', flexShrink: 0 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '3px 8px', background: 'var(--bg, #0d0e12)', borderBottom: border }}>
-        <span style={{ fontFamily: 'monospace', fontSize: 11, color: '#38bdf8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={title}>
-          {title}
-        </span>
-        {media && <span className="dim small" style={{ fontSize: 10 }} title={`@media ${media}`}>@{media.length > 24 ? media.slice(0, 24) + '…' : media}</span>}
-        <div style={{ flex: 1 }} />
-        <span className="dim small" style={{ fontSize: 10, whiteSpace: 'nowrap' }}>{source}</span>
-        {onJump && <button className="btn" style={{ fontSize: 10, padding: '1px 6px' }} onClick={onJump} title="Показать в коде">→ код</button>}
-        <button className="btn" style={{ fontSize: 10, padding: '1px 6px' }} onClick={onSave} title="Записать изменения в файл и сохранить"><Icon name="save" size={11} /></button>
+      {/* Шапка в ДВЕ строки: длинный селектор и длинный путь к файлу больше не
+          распирают ряд (раньше оба были nowrap без minWidth:0 — кнопки уезжали
+          за правый край карточки, а карточку обрезал overflow:hidden). */}
+      <div style={{ padding: '3px 8px', background: 'var(--bg, #0d0e12)', borderBottom: border,
+                    display: 'flex', flexDirection: 'column', gap: 2 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+          <span style={{ flex: '1 1 auto', minWidth: 0, fontFamily: 'monospace', fontSize: 11, color: '#38bdf8',
+                         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={title}>
+            {title}
+          </span>
+          {media && (
+            <span className="dim small" style={{ flexShrink: 0, fontSize: 10 }} title={`@media ${media}`}>
+              @{media.length > 18 ? media.slice(0, 18) + '…' : media}
+            </span>
+          )}
+          {onJump && (
+            <button className="btn" style={{ flexShrink: 0, fontSize: 10, padding: '1px 6px' }}
+                    onClick={onJump} title="Показать в коде">→ код</button>
+          )}
+          <button className="btn" style={{ flexShrink: 0, fontSize: 10, padding: '1px 6px', whiteSpace: 'nowrap' }}
+                  onClick={onSave} title="Записать изменения в файл и сохранить">
+            <Icon name="save" size={11} /> Сохранить
+          </button>
+        </div>
+        <span className="dim small" style={{ fontSize: 10, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+              title={source}>{source}</span>
       </div>
       <textarea
         value={value}

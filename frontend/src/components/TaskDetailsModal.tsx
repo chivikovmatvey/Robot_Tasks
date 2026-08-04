@@ -44,10 +44,13 @@ export function TaskDetailsModal({ tasks, onClose }: { tasks: TaskRefLite[]; onC
   const detail = cur ? cache[cur.uid] : null;
 
   return (
+    // Оверлей сам скроллится (overflow:auto + margin:auto у окна): даже если
+    // внутренний скролл контента по какой-то причине не сработает, окно никогда
+    // не «обрежется» без прокрутки. dvh вместо vh — корректно при панелях браузера.
     <div onClick={onClose}
-         style={{ position: 'fixed', inset: 0, zIndex: 1100, background: 'rgba(0,0,0,0.8)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '2rem' }}>
+         style={{ position: 'fixed', inset: 0, zIndex: 1100, background: 'rgba(0,0,0,0.8)', overflowY: 'auto', display: 'flex', padding: '2rem' }}>
       <div onClick={(e) => e.stopPropagation()}
-           style={{ background: 'var(--bg-elevated, #141414)', border: '1px solid var(--border, #2a2a2a)', borderRadius: 12, width: 720, maxWidth: '92vw', maxHeight: '88vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+           style={{ margin: 'auto', background: 'var(--bg-elevated, #141414)', border: '1px solid var(--border, #2a2a2a)', borderRadius: 12, width: 720, maxWidth: '92vw', maxHeight: 'min(88dvh, 88vh)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         {/* шапка */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.8rem 1rem', borderBottom: '1px solid var(--border, #2a2a2a)' }}>
           <span style={{ fontWeight: 600 }}>Детали задачи{tasks.length > 1 ? ` (${tasks.length})` : ''}</span>
@@ -83,7 +86,7 @@ export function TaskDetailsModal({ tasks, onClose }: { tasks: TaskRefLite[]; onC
             const atts = allAtt.filter((a) => (seen.has(a.url) ? false : (seen.add(a.url), true)));
             return (
               <>
-                {detail.title && <div style={{ fontSize: 14, fontWeight: 600 }}>{detail.title}</div>}
+                {detail.title && <div style={{ fontSize: 14, fontWeight: 600, flexShrink: 0 }}>{detail.title}</div>}
 
                 {fields.length > 0 && (
                   <Block title="Поля задачи">
@@ -91,7 +94,9 @@ export function TaskDetailsModal({ tasks, onClose }: { tasks: TaskRefLite[]; onC
                       {fields.map(([k, label]) => (
                         <Fragment key={k}>
                           <div className="dim small" style={{ whiteSpace: 'nowrap' }}>{label}</div>
-                          <div style={{ fontSize: 13, whiteSpace: 'pre-line', wordBreak: 'break-word', minWidth: 0 }}>{detail.fields[k]}</div>
+                          <div style={{ fontSize: 13, whiteSpace: 'pre-line', wordBreak: 'break-word', minWidth: 0 }}>
+                            <LinkifiedText text={detail.fields[k]} />
+                          </div>
                         </Fragment>
                       ))}
                     </div>
@@ -125,7 +130,7 @@ export function TaskDetailsModal({ tasks, onClose }: { tasks: TaskRefLite[]; onC
                         </div>
                         <div style={{ flex: 1, minWidth: 0 }}>
                           <div style={{ fontSize: 12 }}><b>{c.author || '—'}</b>{c.time ? <span className="dim"> · {c.time}</span> : null}</div>
-                          {c.text && <div style={{ fontSize: 13, whiteSpace: 'pre-line', marginTop: 3 }}>{c.text}</div>}
+                          {c.text && <div style={{ fontSize: 13, whiteSpace: 'pre-line', marginTop: 3 }}><LinkifiedText text={c.text} /></div>}
                         </div>
                       </div>
                     ))}
@@ -142,9 +147,29 @@ export function TaskDetailsModal({ tasks, onClose }: { tasks: TaskRefLite[]; onC
 
 function Block({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div style={{ border: '1px solid var(--border, #2a2a2a)', borderRadius: 10, background: 'var(--bg, #0d0e12)', overflow: 'hidden' }}>
+    // flexShrink: 0 ОБЯЗАТЕЛЕН: блоки лежат во flex-колонке со скроллом —
+    // без него flex ужимал блок под высоту модалки, а overflow:hidden срезал
+    // конец содержимого (обрезалось «Описание» задачи).
+    <div style={{ flexShrink: 0, border: '1px solid var(--border, #2a2a2a)', borderRadius: 10, background: 'var(--bg, #0d0e12)', overflow: 'hidden' }}>
       <div className="dim" style={{ fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.6, padding: '0.5rem 0.8rem', borderBottom: '1px solid var(--border, #2a2a2a)' }}>{title}</div>
       <div style={{ padding: '0.7rem 0.8rem' }}>{children}</div>
     </div>
+  );
+}
+
+// Текст поля с кликабельными ссылками (как в AdRobot): длинные URL переносим
+// по любому символу, чтобы не распирали модалку.
+function LinkifiedText({ text }: { text: string }) {
+  const parts = (text || '').split(/(https?:\/\/[^\s<>"']+)/g);
+  return (
+    <>
+      {parts.map((p, i) =>
+        /^https?:\/\//.test(p) ? (
+          <a key={i} href={p} target="_blank" rel="noopener"
+             style={{ color: 'var(--accent, #7c6fff)', overflowWrap: 'anywhere' }}>{p}</a>
+        ) : (
+          <span key={i}>{p}</span>
+        ))}
+    </>
   );
 }

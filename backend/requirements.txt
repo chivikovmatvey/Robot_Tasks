@@ -1,5 +1,9 @@
 fastapi>=0.115
 uvicorn>=0.32
+# Без watchfiles uvicorn --reload скатывается в StatReload: обходит rglob'ом ВСЁ
+# дерево (включая .venv и storage) каждые 0.25с — жёг целое ядро, а флаги
+# --reload-exclude при этом вообще не действуют.
+watchfiles>=0.24
 python-multipart>=0.0.12
 Pillow>=10.0
 beautifulsoup4>=4.12

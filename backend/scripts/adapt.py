@@ -23,8 +23,10 @@ from datetime import datetime
 # Умная замена цен — понимает форматирование числа и не дублирует валюту
 try:
     from scripts.price_replacer import apply_smart_prices
+    from scripts.parser_v2._primitives import replace_text_ci as _replace_text_ci
 except ImportError:
     from price_replacer import apply_smart_prices  # при запуске напрямую из scripts/
+    from parser_v2._primitives import replace_text_ci as _replace_text_ci
 
 # Цвета — отключаем если Windows cmd (не поддерживает ANSI)
 import os as _os
@@ -152,6 +154,10 @@ def apply_replacements(text: str, rules: list) -> tuple[str, int]:
         find, replace = r['find'], r['replace']
         if r.get('regex'):
             new_text, n = re.subn(find, replace, text)
+        elif r.get('label') == 'ПРОДУКТ':
+            # Продукт меняем без учёта регистра и во всех вариантах написания
+            # (DIAFAST/Diafast/diafast), с границами слова — см. replace_text_ci.
+            new_text, n = _replace_text_ci(text, find, replace)
         else:
             n = text.count(find)
             new_text = text.replace(find, replace)

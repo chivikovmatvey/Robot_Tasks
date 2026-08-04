@@ -436,8 +436,15 @@ def adapt_config(sid: str, lid: str, params: dict) -> list[str]:
     reps: list[tuple[re.Pattern, str]] = []
     po = (params.get("product_old") or "").strip()
     pn = (params.get("product_new") or "").strip()
+    product_pat = None
     if po and pn and po.lower() != pn.lower():
-        reps.append((re.compile(re.escape(po), re.IGNORECASE), pn))
+        # Тот же режим, что в обычной адаптации: любой регистр, границы слова
+        # (иначе «Vita» полезет внутрь «vitaminas»), регистр найденного
+        # переносится на новое имя. См. parser_v2/_primitives.
+        from scripts.parser_v2._primitives import word_pattern
+        product_pat = word_pattern(po)
+        if product_pat is not None:
+            reps.append((product_pat, pn))
     for s_num, s_cur, t_num, t_cur in (
         (params.get("src_price_new_num"), params.get("src_price_new_cur"),
          params.get("price_new_num"), params.get("price_new_cur")),
@@ -460,10 +467,16 @@ def adapt_config(sid: str, lid: str, params: dict) -> list[str]:
     if reps:
         counter = {"n": 0}
 
+        from scripts.parser_v2._primitives import apply_case
+
         def _apply(sv: str) -> str:
             out = sv
             for pat, repl in reps:
-                out, k = pat.subn(repl, out)
+                if pat is product_pat:  # продукт — с переносом регистра
+                    out, k = pat.subn(
+                        lambda m, _r=repl: apply_case(m.group(0), _r), out)
+                else:
+                    out, k = pat.subn(repl, out)
                 counter["n"] += k
             return out
 
@@ -660,16 +673,49 @@ def _patch_index_php(sid: str, lid: str) -> list[str]:
 
 # ── перевод строк конфига (вызывается из services.translate) ────
 # Ключи, значения которых переводить нельзя: пути к файлам, коды стран/языков.
-_CFG_SKIP_KEYS = {"productimage", "imagesrc", "src", "poster", "avatar",
-                  "country", "language", "currency", "excludeword",
-                  "pagetitle"}  # pageTitle = название продукта, не переводится
 _CFG_PATHY_RE = re.compile(
     r"\.(png|jpe?g|webp|gif|svg|ico|css|js|php|json|m3u8|mp4|woff2?)$", re.I)
 
+# Перевод конфига VSL-ленда — ТОЛЬКО параметры, относящиеся к показу текста на
+# странице (заголовок, тексты формы, уведомления, подписи UI). Сам конфиг
+# (settings/backfix и пр.) и скрипты не переводятся; комментарии тоже не
+# трогаем здесь — они переводятся отдельно и только применённые к ленду
+# (см. services/vsl_comments.translate_comments).
 
-def _cfg_translatable(key: str, val: str) -> bool:
+# Секции конфига, ВСЕ строковые значения которых — видимый текст страницы.
+_CFG_TEXT_SECTIONS = {"notifications", "title", "footer", "reactions"}
+
+# Отдельные ключи-листья с видимым текстом (в любой секции, кроме
+# заблокированных ниже). Сравнение по нижнему регистру.
+_CFG_TEXT_KEYS = {
+    "overlaytext", "urgencytext", "stockupdatetext", "discounttext",
+    "timerlabel", "nameplaceholder", "nameexample", "phoneexample",
+    "submitbuttontext", "disclaimertext", "headertext", "defaultusername",
+    "commentplaceholder", "commentstitle", "liketext", "replytext",
+    "loginmessage", "copyrighttext", "title", "text",
+}
+
+# Секции/поддеревья, которые НЕ переводятся вообще: конфиг и скрипты
+# (settings, backfix) и комментарии (preparedComments — переводятся отдельно).
+_CFG_BLOCK_SECTIONS = {"settings", "backfix", "preparedcomments"}
+
+
+def _cfg_key_allowed(path: tuple[str, ...]) -> bool:
+    """Разрешён ли перевод строки по её пути ключей от корня конфига."""
+    if not path:
+        return False
+    low = [str(p).lower() for p in path]
+    if any(p in _CFG_BLOCK_SECTIONS for p in low):
+        return False
+    if any(p in _CFG_TEXT_SECTIONS for p in low):
+        return True
+    return low[-1] in _CFG_TEXT_KEYS
+
+
+def _cfg_value_translatable(val: str) -> bool:
+    """Похоже ли значение на видимый текст (а не URL/путь/код)."""
     v = (val or "").strip()
-    if key.lower() in _CFG_SKIP_KEYS or len(v) < 2:
+    if len(v) < 2:
         return False
     if v.startswith(("http://", "https://")) or _CFG_PATHY_RE.search(v):
         return False
@@ -678,21 +724,26 @@ def _cfg_translatable(key: str, val: str) -> bool:
     return bool(re.search(r"[^\W\d_]", v))
 
 
+def _cfg_translatable(path: tuple[str, ...], val: str) -> bool:
+    return _cfg_key_allowed(path) and _cfg_value_translatable(val)
+
+
 def config_translatable_strings(cfg: dict) -> list[str]:
-    """Переводимые строковые значения конфига (тексты формы, уведомления,
-    комментарии fakeChat и т.д.) — уникальные, длинные первыми."""
+    """Переводимые строковые значения конфига — только видимый текст страницы
+    (заголовок, тексты формы, уведомления, подписи UI). Конфиг/скрипты и
+    комментарии не включаются. Уникальные, длинные первыми."""
     out: dict[str, None] = {}
 
-    def walk(val, key: str = "") -> None:
+    def walk(val, path: tuple[str, ...] = ()) -> None:
         if isinstance(val, str):
-            if _cfg_translatable(key, val):
+            if _cfg_translatable(path, val):
                 out.setdefault(val.strip(), None)
         elif isinstance(val, dict):
             for k, x in val.items():
-                walk(x, str(k))
+                walk(x, path + (str(k),))
         elif isinstance(val, list):
             for x in val:
-                walk(x, key)
+                walk(x, path)
 
     walk(cfg)
     return sorted(out, key=len, reverse=True)
@@ -701,17 +752,17 @@ def config_translatable_strings(cfg: dict) -> list[str]:
 def config_apply_translations(cfg: dict, mapping: dict[str, str]):
     """Возвращает копию конфига с применённым словарём перевода (те же
     правила обхода, что и при сборе блоков)."""
-    def walk(val, key: str = ""):
+    def walk(val, path: tuple[str, ...] = ()):
         if isinstance(val, str):
-            if _cfg_translatable(key, val):
+            if _cfg_translatable(path, val):
                 tr = mapping.get(val.strip())
                 if tr and tr.strip() and tr.strip() != val.strip():
                     return tr
             return val
         if isinstance(val, dict):
-            return {k: walk(x, str(k)) for k, x in val.items()}
+            return {k: walk(x, path + (str(k),)) for k, x in val.items()}
         if isinstance(val, list):
-            return [walk(x, key) for x in val]
+            return [walk(x, path) for x in val]
         return val
 
     return walk(cfg)

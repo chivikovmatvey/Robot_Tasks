@@ -38,37 +38,45 @@ def replace_split_in_raw(raw_html: str, involved_texts: list[str],
 
 
 def replace_split_text(raw_html: str, soup: BeautifulSoup,
-                       find_str: str, replace_str: str) -> tuple[str, int]:
+                       find_str: str, replace_str: str,
+                       *, ci: bool = False) -> tuple[str, int]:
     """
     Замена текста разорванного по inline-тегам.
     <span>Dia</span><span>beet</span> → <span>Diabarol</span><span></span>
+
+    ci=True — без учёта регистра (название продукта в вёрстке бывает капсом).
     """
     groups = collect_all_groups(soup)
     count = 0
     find_norm = vis_normalize(find_str)
     is_number = find_str.isdigit()  # голое число цены — нужны границы
 
+    def _cmp(s: str) -> str:
+        return s.lower() if ci else s
+
+    find_cmp = _cmp(find_norm)
+
     for group in groups:
         group_norm = vis_normalize(group.text)
-        idx = group_norm.find(find_norm)
+        idx = _cmp(group_norm).find(find_cmp)
         if idx == -1:
             continue
 
-        match_start = group.text.find(find_str)
+        match_start = _cmp(group.text).find(_cmp(find_str))
         if match_start == -1:
             match_start = -1
             match_end = -1
             fpos = 0
-            for ci, ch in enumerate(group.text):
+            for pos, ch in enumerate(group.text):
                 ch_norm = vis_normalize(ch)
                 if not ch_norm:
                     continue
-                if fpos < len(find_norm) and ch_norm == find_norm[fpos]:
+                if fpos < len(find_norm) and _cmp(ch_norm) == find_cmp[fpos]:
                     if fpos == 0:
-                        match_start = ci
+                        match_start = pos
                     fpos += 1
                     if fpos == len(find_norm):
-                        match_end = ci + 1
+                        match_end = pos + 1
                         break
                 elif ch == ' ':
                     continue
@@ -101,9 +109,9 @@ def replace_split_text(raw_html: str, soup: BeautifulSoup,
 
         if len(involved) >= 2:
             involved_texts = [t for _, t in involved]
-            first_clean = vis_normalize(involved_texts[0])
-            last_clean = vis_normalize(involved_texts[-1])
-            if find_norm.startswith(first_clean) and find_norm.endswith(last_clean):
+            first_clean = _cmp(vis_normalize(involved_texts[0]))
+            last_clean = _cmp(vis_normalize(involved_texts[-1]))
+            if find_cmp.startswith(first_clean) and find_cmp.endswith(last_clean):
                 raw_html, n = replace_split_in_raw(raw_html, involved_texts, replace_str)
                 if n:
                     count += n
@@ -114,7 +122,7 @@ def replace_split_text(raw_html: str, soup: BeautifulSoup,
                 inner_groups = collect_inline_groups(node)
                 for ig in inner_groups:
                     ig_norm = vis_normalize(ig.text)
-                    if find_norm not in ig_norm:
+                    if find_cmp not in _cmp(ig_norm):
                         continue
                     inner_involved = []
                     for inode, _, _ in ig.nodes:
@@ -123,9 +131,9 @@ def replace_split_text(raw_html: str, soup: BeautifulSoup,
                             inner_involved.append((inode, itext))
                     if len(inner_involved) >= 2:
                         inner_texts = [t for _, t in inner_involved]
-                        first_clean = vis_normalize(inner_texts[0])
-                        last_clean = vis_normalize(inner_texts[-1])
-                        if find_norm.startswith(first_clean) and find_norm.endswith(last_clean):
+                        first_clean = _cmp(vis_normalize(inner_texts[0]))
+                        last_clean = _cmp(vis_normalize(inner_texts[-1]))
+                        if find_cmp.startswith(first_clean) and find_cmp.endswith(last_clean):
                             raw_html, n = replace_split_in_raw(raw_html, inner_texts, replace_str)
                             if n:
                                 count += n

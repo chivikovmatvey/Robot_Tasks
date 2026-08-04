@@ -65,10 +65,14 @@ class LanderStatus:
     ERROR = "error"
 
 
-# Модификаторы названия продукта, которые не являются самим продуктом.
-# 'adult' — служебная пометка группы: она уходит в скобку [pl xx adult]
-# и не должна попадать ни в название оффера, ни в видимый текст ленда.
-_PRODUCT_MODIFIERS = {"low", "resell", "misslead", "mislead", "pro", "plus", "2", "3", "adult"}
+# Модификаторы названия продукта (Low / Resell / High Price / adult …) — не
+# бренд, а пометка закупки: на ленде их нет, в новое название и в поиск донора
+# они попадать не должны. Единый источник правды — scripts/scanner.py.
+# 'adult' живёт в скобке названия оффера ([pl xx adult]), а не в продукте.
+from scripts.scanner import (  # noqa: E402
+    PRODUCT_MODIFIERS as _PRODUCT_MODIFIERS,
+    strip_product_modifiers,
+)
 
 # Код вертикали в имени группы оффера → ПОЛНОЕ название для скобки Keitaro
 # [VERTICAL-GEO] (как в реальных офферах: [HYPERTENSION-CZ], [PROSTATITIS-CL-...]).
@@ -175,22 +179,22 @@ def parse_target_offer(offer: str, geos: Optional[dict] = None) -> dict:
         out["product"] = " ".join(t for t in middle if t.lower() != "adult")
         # Ядро бренда — непрерывный префикс до первого модификатора (Resell/Low/…),
         # чтобы оставался подстрокой для фильтра грида Keitaro и адаптации.
-        core: list[str] = []
-        for t in middle:
-            if t.lower() in _PRODUCT_MODIFIERS:
-                break
-            core.append(t)
-        out["product_search"] = " ".join(core) if core else out["product"]
+        out["product_search"] = strip_product_modifiers(out["product"])
     return out
 
 
 def parse_donor_product(offer_name: str) -> str:
-    """Из названия донора '9224 Calmano [VARICOSIS-PE-VA_0050] ...' → 'Calmano'."""
+    """Из названия донора '9224 Calmano [VARICOSIS-PE-VA_0050] ...' → 'Calmano'.
+
+    Модификаторы отбрасываются ('21247 Vizoptic Low [VISION-SV] …' → 'Vizoptic'):
+    на самом ленде написано только ядро бренда, и искать в тексте «Vizoptic Low»
+    бессмысленно — замена продукта не находила ничего и старое имя оставалось.
+    """
     if not offer_name:
         return ""
     head = offer_name.split("[")[0]
     head = re.sub(r"^\s*\d{2,7}\s*", "", head)  # убрать ведущий id
-    return head.strip()
+    return strip_product_modifiers(head.strip())
 
 
 def split_price(s: str) -> tuple[str, str]:
@@ -274,6 +278,14 @@ class AdaptationSession:
         d["expires_at"] = (
             self.archived_at + ARCHIVE_TTL_SECONDS if self.archived_at else None
         )
+        # Размер АКТУАЛЬНОГО архива ленда (output, а не исходника) — для UI.
+        from utils.runners import STORAGE
+        for ld in d["landers"].values():
+            ld["output_size"] = None
+            if ld.get("output_name"):
+                p = STORAGE / "outputs" / ld["output_name"]
+                if p.exists():
+                    ld["output_size"] = p.stat().st_size
         return d
 
     def task_fields(self, uid: Optional[str]) -> dict:
@@ -469,6 +481,35 @@ class SessionManager:
     def get(self, sid: str) -> Optional[AdaptationSession]:
         self._cleanup_expired()
         return self._sessions.get(sid)
+
+    # Статусы «в процессе»: их держит живой поток, поэтому после перезапуска
+    # процесса они заведомо мертвы.
+    _IN_FLIGHT_STATUSES = (LanderStatus.QUEUED, LanderStatus.DOWNLOADING,
+                           LanderStatus.SCANNING, LanderStatus.ADAPTING)
+
+    def reset_stale_statuses(self) -> list[str]:
+        """Переводит ленды, «застрявшие» в процессе, в error — вызывается ОДИН
+        РАЗ при старте процесса.
+
+        Поток адаптации/скачивания не переживает перезапуск воркера (авто-reload,
+        kill), а статус остаётся 'adapting': ленд выглядит вечно адаптирующимся,
+        фронт бесконечно его опрашивает. Возвращает список 'sid/lid'.
+        """
+        touched: list[str] = []
+        for sid, s in list(self._sessions.items()):
+            dirty = False
+            for lid, ls in (s.landers or {}).items():
+                if ls.status in self._IN_FLIGHT_STATUSES:
+                    ls.status = (LanderStatus.ADAPTED if ls.output_name
+                                 else LanderStatus.ERROR)
+                    if ls.status == LanderStatus.ERROR:
+                        ls.error = ("Прервано перезапуском сервера — "
+                                    "запусти шаг заново")
+                    touched.append(f"{sid}/{lid}")
+                    dirty = True
+            if dirty:
+                self._save(s)
+        return touched
 
     def list(self, archived: bool = False) -> list[dict]:
         self._cleanup_expired()
@@ -981,6 +1022,9 @@ class SessionManager:
         # VSL: продукт-донор = pageTitle конфига (название оффера-шаблона нерелевантно).
         if s.is_vsl and scan.get("product"):
             donor_product = scan["product"]
+        # Ни в поиск по ленду, ни в новое имя модификаторы (Low/Resell/High Price)
+        # не идут — их на ленде нет, они только ломают замену продукта.
+        donor_product = strip_product_modifiers(donor_product)
 
         # exclude_word: приоритет — вертикаль из группы (надёжно), иначе из scan.
         # ВАЖНО: хвостовой пробел значим (напр. 'hy ') — не обрезаем значение.
@@ -992,7 +1036,8 @@ class SessionManager:
             "geo_id": geo_id,
             "product_old": donor_product,
             # Для адаптации — ядро бренда (без Resell/Low), иначе полное имя.
-            "product_new": target.get("product_search") or target.get("product", ""),
+            "product_new": strip_product_modifiers(
+                target.get("product_search") or target.get("product", "")),
             "price_new": f"{new_num} {new_cur}".strip(),
             "price_old": f"{old_num} {old_cur}".strip(),
             "price_new_num": new_num,
@@ -1033,7 +1078,6 @@ class SessionManager:
         prod = set((ls.scan or {}).get("prod_images", []) or [])
 
         # Собираем текст всех HTML/CSS/JS, чтобы понять, какие медиа упоминаются.
-        used_names: set[str] = set()
         text_blob = ""
         with zipfile.ZipFile(ls.zip_path, "r") as zf:
             for info in zf.infolist():
@@ -1048,7 +1092,14 @@ class SessionManager:
                            if not i.is_dir()
                            and Path(i.filename).suffix.lower() in _MEDIA_EXT]
 
+        # Закомментированные блоки — не «на ленде»: ссылка на медиа внутри
+        # <!-- … --> или /* … */ давала ложное «используется», и в списке
+        # показывались картинки, которых на ленде нет.
+        text_blob = re.sub(r"<!--.*?-->", "", text_blob, flags=re.S)
+        text_blob = re.sub(r"/\*.*?\*/", "", text_blob, flags=re.S)
+
         out: list[dict] = []
+        seen_names: dict[str, int] = {}   # name → индекс в out (дедуп)
         for info in media_infos:
             name = Path(info.filename).name
             ext = Path(name).suffix.lower()
@@ -1059,14 +1110,25 @@ class SessionManager:
             used = is_product or (name and name in text_blob)
             if used_only and not used:
                 continue
-            out.append({
+            item = {
                 "path": info.filename,
                 "name": name,
                 "size": info.file_size,
                 "kind": kind,
                 "is_product": is_product,
                 "used": used,
-            })
+            }
+            # Одно имя в разных папках (img/x.png и images/x.png) — в списке
+            # ОДНА строка: image_map и замены работают по имени файла, дубль
+            # только путает. Предпочитаем запись «фото продукта» / крупнее.
+            prev_i = seen_names.get(name)
+            if prev_i is not None:
+                prev = out[prev_i]
+                if (item["is_product"], item["size"]) > (prev["is_product"], prev["size"]):
+                    out[prev_i] = item
+                continue
+            seen_names[name] = len(out)
+            out.append(item)
         # Сначала фото продукта, потом по имени.
         out.sort(key=lambda m: (not m["is_product"], m["name"].lower()))
         return out
@@ -1101,24 +1163,38 @@ class SessionManager:
         target.write_bytes(data)
         return target.name
 
+    def _replacement_dirs(self, sid: str, lid: str) -> list[Path]:
+        """Папки замен, видимые ленду: сперва СВОЯ (бакет задачи), затем
+        остальные бакеты сессии. В объединённой сессии фото, загруженные для
+        одного ленда, должны быть доступны и другим лендам той же сессии —
+        раньше изоляция по task_uid прятала их друг от друга."""
+        own = self.replacement_dir(sid, lid)
+        root = self.dir / sid / "replacements"
+        others = ([d for d in sorted(root.iterdir())
+                   if d.is_dir() and d != own] if root.exists() else [])
+        return [own] + others
+
     def list_replacements(self, sid: str, lid: str) -> list[dict]:
-        """Список изолированных по задаче замен (имя + размер)."""
-        d = self.replacement_dir(sid, lid)
-        if not d.exists():
-            return []
-        return sorted(
-            ({"name": p.name, "size": p.stat().st_size}
-             for p in d.iterdir() if p.is_file()),
-            key=lambda x: x["name"].lower(),
-        )
+        """Замены, доступные ленду: свой бакет + остальные бакеты сессии."""
+        seen: dict[str, dict] = {}
+        for d in self._replacement_dirs(sid, lid):
+            if not d.exists():
+                continue
+            for p in d.iterdir():
+                if p.is_file() and p.name not in seen:  # свой бакет приоритетнее
+                    seen[p.name] = {"name": p.name, "size": p.stat().st_size}
+        return sorted(seen.values(), key=lambda x: x["name"].lower())
 
     def replacement_file(self, sid: str, lid: str, name: str) -> Optional[Path]:
-        """Путь к конкретной замене (для отдачи на превью)."""
+        """Путь к конкретной замене (свой бакет, затем остальные бакеты сессии)."""
         safe = re.sub(r"[^\w.-]", "_", name or "")
         if not safe:
             return None
-        p = self.replacement_dir(sid, lid) / safe
-        return p if p.exists() else None
+        for d in self._replacement_dirs(sid, lid):
+            p = d / safe
+            if p.exists():
+                return p
+        return None
 
     def delete_replacement(self, sid: str, lid: str, name: str) -> bool:
         """Удаляет файл замены из загруженных медиа задачи. Заодно вычищает его
@@ -1126,8 +1202,8 @@ class SessionManager:
         safe = re.sub(r"[^\w.-]", "_", name or "")
         if not safe:
             return False
-        p = self.replacement_dir(sid, lid) / safe
-        if not p.exists():
+        p = self.replacement_file(sid, lid, safe)  # свой бакет или другой бакет сессии
+        if p is None:
             return False
         p.unlink()
         # Если эта замена была выбрана в image_map — убрать (иначе adapt не найдёт).
@@ -1364,6 +1440,18 @@ class SessionManager:
         if not params.get("product_new"):
             raise ValueError("Не задан product_new")
 
+        # Модификаторы (Low / Resell / High Price / adult) — не часть бренда:
+        # на ленде их нет, и в новом названии им тоже не место. Чистим и старый
+        # (иначе поиск по тексту не находит), и новый — в т.ч. в сессиях,
+        # сохранённых до этого правила, и при ручном вводе в форме.
+        mod_notes: list[str] = []
+        for key in ("product_old", "product_new"):
+            raw = (params.get(key) or "").strip()
+            core = strip_product_modifiers(raw)
+            if core and core != raw:
+                params[key] = core
+                mod_notes.append(f"{key}: «{raw}» → «{core}»")
+
         prev_status = ls.status
         ls.status = LanderStatus.ADAPTING
         ls.error = None
@@ -1371,9 +1459,9 @@ class SessionManager:
 
         from utils.files import output_relative_url
 
-        # Изолированные по задаче замены ищутся перед глобальной storage/assets/.
-        repl_dir = self.replacement_dir(sid, lid)
-        extra_dirs = [str(repl_dir)] if repl_dir.exists() else []
+        # Замены ищутся перед глобальной storage/assets/: свой бакет задачи,
+        # затем остальные бакеты сессии (общие фото объединённой сессии).
+        extra_dirs = [str(d) for d in self._replacement_dirs(sid, lid) if d.exists()]
 
         try:
             # VSL: clean удалил бы config.php (он в правилах «чужих файлов»),
@@ -1395,6 +1483,11 @@ class SessionManager:
         ls.adapt_params = {
             **{k: old_ap[k] for k in PUBLISH_KEYS if k in old_ap}, **params}
         ls.adapt_log = capture.to_dicts()
+        if mod_notes:
+            ls.adapt_log = [
+                {"text": "Модификаторы убраны из названия продукта — "
+                         + "; ".join(mod_notes), "level": "success"}
+            ] + ls.adapt_log
         if out_path:
             ls.output_name = Path(out_path).name
             ls.output_url = output_relative_url(out_path)
@@ -1451,6 +1544,47 @@ class SessionManager:
             "output_url": ls.output_url,
             "log": ls.adapt_log,
             "error": ls.error,
+        }
+
+    def optimize_webp(self, sid: str, lid: str) -> dict:
+        """Конвертирует все изображения ленда в WebP (scripts/optimize.py) и
+        делает результат новым output-архивом (со снимком в историю).
+
+        Работает по АКТУАЛЬНОМУ архиву: адаптированному output, а если его нет
+        — по исходному zip ленда.
+        """
+        s, ls = self._get_lander(sid, lid)
+        try:
+            src = self._output_zip(sid, lid)
+        except ValueError:
+            if not ls.zip_path or not Path(ls.zip_path).exists():
+                raise ValueError("Нет архива ленда для конвертации")
+            src = Path(ls.zip_path)
+        size_before = src.stat().st_size
+
+        out_path, capture = runners.run_optimize(str(src))
+        log_dicts = capture.to_dicts()
+        if not out_path:
+            return {"success": False, "log": log_dicts,
+                    "error": "Оптимизация не вернула результат"}
+
+        from utils.files import output_relative_url
+        ls.output_name = Path(out_path).name
+        ls.output_url = output_relative_url(out_path)
+        if ls.status not in (LanderStatus.ADAPTED,):
+            ls.status = LanderStatus.ADAPTED
+        ls.adapt_log = (ls.adapt_log or []) + log_dicts
+        self._save(s)
+        self._snapshot_output(sid, lid, "WebP-оптимизация")
+        size_after = Path(out_path).stat().st_size
+        return {
+            "success": True,
+            "output_name": ls.output_name,
+            "output_url": ls.output_url,
+            "status": ls.status,
+            "size_before": size_before,
+            "size_after": size_after,
+            "log": log_dicts,
         }
 
     # ── правки файлов адаптированного ленда (для чата-агента) ─────
@@ -1688,14 +1822,85 @@ class SessionManager:
         return None
 
     @staticmethod
-    def _anchored_ops(old: str, new: str, ctx: int = 32) -> list[dict]:
+    def _changed_span(old: str, new: str) -> tuple[int, int, int, int]:
+        """Границы изменённого участка: (a1, a2, b1, b2) после отсечения общего
+        префикса и суффикса. Считается за O(n) на C-уровне (commonprefix), без
+        difflib."""
+        import os.path
+        pre = len(os.path.commonprefix([old, new]))
+        # суффикс — тот же commonprefix по перевёрнутым строкам, но не заезжая
+        # в уже отрезанный префикс
+        limit = min(len(old), len(new)) - pre
+        suf = len(os.path.commonprefix([old[::-1], new[::-1]]))
+        suf = max(0, min(suf, limit))
+        return pre, len(old) - suf, pre, len(new) - suf
+
+    # Больше строк в изменённом участке — построчный дифф не считаем (одна
+    # замена на участок): difflib деградирует на десятках тысяч ОДИНАКОВЫХ строк.
+    _DIFF_MAX_LINES = 20_000
+
+    @classmethod
+    def _line_spans(cls, old: str, new: str, base_o: int = 0,
+                    base_n: int = 0) -> list[tuple[int, int, int, int]]:
+        """Изменённые участки в СИМВОЛЬНЫХ границах, посчитанные ПОСТРОЧНО.
+        base_o/base_n — смещения, если old/new это вырезанные куски файла.
+
+        difflib по строкам дёшев (элементы почти уникальны): 161КБ index.php с
+        двумя правками — 12мс. Тот же difflib ПО СИМВОЛАМ на этом же файле
+        считался 2+ МИНУТЫ (алфавит крошечный → find_longest_match вырождается).
+        autojunk оставляем ВКЛЮЧЁННЫМ (дефолт): на файлах с тысячами одинаковых
+        строк он и спасает от вырождения, а точность здесь не важна — вокруг
+        участка всё равно берётся контекст-якорь.
+        """
+        import difflib
+        ol, nl = old.splitlines(keepends=True), new.splitlines(keepends=True)
+        if max(len(ol), len(nl)) > cls._DIFF_MAX_LINES:
+            return []
+        o_off, n_off = [base_o], [base_n]
+        for line in ol:
+            o_off.append(o_off[-1] + len(line))
+        for line in nl:
+            n_off.append(n_off[-1] + len(line))
+        sm = difflib.SequenceMatcher(None, ol, nl)
+        return [(o_off[i1], o_off[i2], n_off[j1], n_off[j2])
+                for tag, i1, i2, j1, j2 in sm.get_opcodes() if tag != "equal"]
+
+    # Размер участка, внутри которого ещё уточняем дифф ПО СИМВОЛАМ (короткие
+    # аккуратные якоря). Всё, что больше — одна замена на участок целиком.
+    _DIFF_WINDOW = 2048
+
+    @classmethod
+    def _anchored_ops(cls, old: str, new: str, ctx: int = 32) -> list[dict]:
         """Дифф old→new как список якорных замен {find, replace}: изменённые
         куски с контекстом вокруг, контекст расширяется до уникальности find
-        в old. Близкие изменения сливаются, чтобы контексты не пересекались."""
+        в old. Близкие изменения сливаются, чтобы контексты не пересекались.
+
+        Три шага, каждый дешёвый:
+          1) отсекаем общий префикс/суффикс (C-уровень) — правка из редактора
+             локальна, от файла остаётся крошечный участок;
+          2) внутри него построчный дифф — разносит далёкие правки по отдельным
+             якорям;
+          3) участки не больше _DIFF_WINDOW уточняем посимвольно.
+        Прямой посимвольный дифф ВСЕГО файла (как было) жёг минуты CPU на каждое
+        сохранение из редактора и через GIL тормозил всё остальное — адаптацию,
+        превью, опрос статусов.
+        """
+        if old == new:
+            return []
         import difflib
-        sm = difflib.SequenceMatcher(None, old, new, autojunk=False)
-        spans = [(a1, a2, b1, b2) for tag, a1, a2, b1, b2 in sm.get_opcodes()
-                 if tag != "equal"]
+        o1, o2, n1, n2 = cls._changed_span(old, new)
+        spans = cls._line_spans(old[o1:o2], new[n1:n2], o1, n1) or [(o1, o2, n1, n2)]
+        refined: list[tuple[int, int, int, int]] = []
+        for a1, a2, b1, b2 in spans:
+            if max(a2 - a1, b2 - b1) > cls._DIFF_WINDOW:
+                refined.append((a1, a2, b1, b2))
+                continue
+            sm = difflib.SequenceMatcher(None, old[a1:a2], new[b1:b2],
+                                         autojunk=False)
+            sub = [(a1 + x1, a1 + x2, b1 + y1, b1 + y2)
+                   for tag, x1, x2, y1, y2 in sm.get_opcodes() if tag != "equal"]
+            refined.extend(sub or [(a1, a2, b1, b2)])
+        spans = refined
         if not spans:
             return []
         # слить изменения с промежутком < 2*ctx (их контексты бы пересеклись)
@@ -1711,7 +1916,14 @@ class SessionManager:
             while True:
                 lo, hi = max(0, a1 - c), min(len(old), a2 + c)
                 find = old[lo:hi]
-                if old.count(find) == 1 or (lo == 0 and hi == len(old)):
+                # Уникальность считаем С УЧЁТОМ ПЕРЕСЕЧЕНИЙ: str.count ищет
+                # только НЕпересекающиеся вхождения и на повторяющемся тексте
+                # («<br>» ×20000) объявлял якорь уникальным, хотя str.replace
+                # потом попадал в первое из пересекающихся вхождений — правка
+                # уезжала в другое место файла.
+                first = old.find(find)
+                if (first >= 0 and old.find(find, first + 1) == -1) \
+                        or (lo == 0 and hi == len(old)):
                     break
                 c *= 2
             ops.append({"find": find,

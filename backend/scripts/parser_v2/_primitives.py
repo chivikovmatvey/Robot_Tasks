@@ -18,8 +18,61 @@ NUM_BAD_NEXT = frozenset(
     '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_%')
 
 
+# Символы, которые «приклеивают» слово к соседнему токену: если продукт окружён
+# ими, это часть другого слова (vitaminas ⊃ vita), а не название продукта.
+WORD_CHARS = frozenset(
+    '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_')
+
+
+def apply_case(sample: str, replace_str: str) -> str:
+    """Переносит регистр найденного текста на замену.
+
+    'DIAFAST' → 'NUEVO', 'diafast' → 'nuevo', 'Diafast'/смешанный → как задано
+    (канонический вид из параметров адаптации).
+    """
+    letters = [c for c in sample if c.isalpha()]
+    if len(letters) >= 2:
+        if all(c.isupper() for c in letters):
+            return replace_str.upper()
+        if all(c.islower() for c in letters):
+            return replace_str.lower()
+    return replace_str
+
+
+def word_pattern(find_str: str):
+    """Регекс для поиска названия продукта БЕЗ учёта регистра.
+
+    - границы слова по WORD_CHARS: «Vita» не совпадёт внутри «vitaminas»;
+    - пробелы в названии матчат любой пробельный ряд («Focus  Clear»).
+    Без этих границ регистронезависимый поиск ломал бы обычные слова текста.
+    """
+    parts = [re.escape(p) for p in find_str.split() if p]
+    if not parts:
+        return None
+    body = r'\s+'.join(parts)
+    return re.compile(
+        r'(?<![0-9A-Za-z_])' + body + r'(?![0-9A-Za-z_])', re.IGNORECASE)
+
+
+def replace_text_ci(text: str, find_str: str, replace_str: str) -> tuple[str, int]:
+    """Регистронезависимая замена названия продукта во ВСЁМ тексте (js/json/txt —
+    там нет HTML-структуры). Регистр найденного переносится на замену."""
+    pat = word_pattern(find_str)
+    if not pat:
+        return text, 0
+    count = 0
+
+    def _sub(m):
+        nonlocal count
+        count += 1
+        return apply_case(m.group(0), replace_str)
+
+    return pat.sub(_sub, text), count
+
+
 def replace_outside_attrs(raw_html: str, find_str: str, replace_str: str,
-                          *, number_mode: bool = False) -> tuple[str, int]:
+                          *, number_mode: bool = False,
+                          ci: bool = False) -> tuple[str, int]:
     """
     Заменяет find_str на replace_str ТОЛЬКО вне HTML-атрибутов.
     Пропускает содержимое ="..." и ='...', HTML-комментарии и содержимое
@@ -28,11 +81,20 @@ def replace_outside_attrs(raw_html: str, find_str: str, replace_str: str,
     а «50% DE DESCUENTO» становилось «229% DE DESCUENTO»).
     number_mode=True — find_str это голое число цены: заменяем только при
     «ценовых» границах (см. NUM_BAD_PREV/NEXT).
+    ci=True — регистронезависимо, с границами слова и переносом регистра на
+    замену (для названия продукта: DIAFAST/Diafast/diafast — все варианты).
     """
-    if not find_str or find_str not in raw_html:
+    if not find_str:
+        return raw_html, 0
+    pat = word_pattern(find_str) if ci else None
+    if ci:
+        if not pat or not pat.search(raw_html):
+            return raw_html, 0
+    elif find_str not in raw_html:
         return raw_html, 0
 
     lower = raw_html.lower()
+    first_lo = find_str[0].lower()
     result = []
     i = 0
     n = len(raw_html)
@@ -81,7 +143,16 @@ def replace_outside_attrs(raw_html: str, find_str: str, replace_str: str,
             i = j + 1
             continue
 
-        if raw_html[i:i+find_len] == find_str:
+        if ci:
+            # Регистронезависимо: пробуем регекс только там, где совпал первый
+            # символ (полный match на каждой позиции был бы дорогим).
+            m = pat.match(raw_html, i) if lower[i] == first_lo else None
+            if m:
+                result.append(apply_case(m.group(0), replace_str))
+                count += 1
+                i = m.end()
+                continue
+        elif raw_html[i:i+find_len] == find_str:
             if number_mode:
                 prev = raw_html[i-1] if i > 0 else ''
                 nxt = raw_html[i+find_len] if i + find_len < n else ''
@@ -133,22 +204,40 @@ def replace_in_file_attrs(raw_html: str, find_str: str, replace_str: str) -> tup
 
 
 def replace_in_named_attr(raw_html: str, attr_name: str,
-                          find_str: str, replace_str: str) -> tuple[str, int]:
-    """Заменяет find_str на replace_str ТОЛЬКО внутри конкретного атрибута attr_name."""
-    if not find_str or find_str not in raw_html:
+                          find_str: str, replace_str: str,
+                          *, ci: bool = False) -> tuple[str, int]:
+    """Заменяет find_str на replace_str ТОЛЬКО внутри конкретного атрибута attr_name.
+
+    ci=True — без учёта регистра (значение атрибута может быть в любом виде:
+    data-product-name="DIAFAST").
+    """
+    if not find_str:
+        return raw_html, 0
+    inner = word_pattern(find_str) if ci else None
+    if ci:
+        if not inner or not inner.search(raw_html):
+            return raw_html, 0
+    elif find_str not in raw_html:
         return raw_html, 0
 
     count = 0
     pattern = (
+        # (?<![-\w:]) — имя атрибута целиком: 'alt' не должен ловиться внутри
+        # 'data-salt', 'title' — внутри 'data-title'.
+        r'(?<![-\w:])'
         r'(' + re.escape(attr_name) + r'\s*=\s*["\'])'
-        r'([^"\']*?' + re.escape(find_str) + r'[^"\']*?)'
+        r'([^"\']*?' + (inner.pattern if ci else re.escape(find_str)) + r'[^"\']*?)'
         r'(["\'])'
     )
 
     def _replacer(m, _f=find_str, _r=replace_str):
         nonlocal count
         count += 1
-        return m.group(1) + m.group(2).replace(_f, _r) + m.group(3)
+        val = m.group(2)
+        val = inner.sub(lambda im: apply_case(im.group(0), _r), val) if ci \
+            else val.replace(_f, _r)
+        return m.group(1) + val + m.group(3)
 
-    raw_html = re.sub(pattern, _replacer, raw_html)
+    raw_html = re.sub(pattern, _replacer, raw_html,
+                      flags=re.IGNORECASE if ci else 0)
     return raw_html, count

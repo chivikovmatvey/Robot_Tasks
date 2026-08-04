@@ -158,6 +158,7 @@ export interface TaskSummary {
   offer: string;
   category: string;
   deadline: string;
+  created: string;               // время постановки «18:16 31.07»
 }
 
 export interface CommentAttachment {
@@ -277,6 +278,10 @@ export interface KeitaroPlan {
   offer_id?: number;
   network?: string | null;
   final_name?: string;
+  // авто-созданная тестовая кампания (mode=uploaded)
+  campaign_url?: string;
+  campaign_name?: string;
+  campaign_error?: string;   // авто-кампания не создалась — причина для UI
   // mode=created_pending_rename — оффер создан, ждём подтверждения id
   name_no_id?: string;
   id_candidates?: { id: number; name: string; has_id_prefix: boolean }[];
@@ -289,6 +294,33 @@ export interface KeitaroRenameResult {
   offer_id: number;
   final_name: string;
   mode: string;
+  // авто-созданная тестовая кампания (если получилось)
+  campaign_url?: string;
+  campaign_name?: string;
+  campaign_error?: string;   // авто-кампания не создалась — причина для UI
+}
+
+// Статус массовой заливки лендов сессии.
+export interface BulkUploadItem {
+  lid: string;
+  name: string;
+  stage: 'queued' | 'uploading' | 'done' | 'needs_id' | 'error' | 'cancelled';
+  step: string;
+  progress?: number;          // 0..1 — доля шагов этого ленда
+  offer_id?: number | null;
+  final_name?: string | null;
+  campaign_url?: string | null;
+  campaign_name?: string | null;
+  error?: string | null;
+}
+export interface BulkUploadStatus {
+  running: boolean;
+  started_at?: number;
+  items: BulkUploadItem[];
+  total: number;
+  done: number;
+  progress?: number;          // 0..1 — общий прогресс ПО ШАГАМ, не по лендам
+  cancelling?: boolean;       // остановку запросили, текущий ленд дозаливается
 }
 
 // Событие стриминга чата-агента.
@@ -477,6 +509,7 @@ export interface LanderState {
   chat?: any[];
   offer_override?: string | null;
   history?: LanderVersion[];
+  output_size?: number | null;   // размер актуального (output) архива, байт
 }
 
 export interface LanderVersion {
@@ -901,12 +934,52 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ type, adult: !!adult }),
     }),
+  // Привязать к ленду уже существующий оффер по номеру, вписанному вручную
+  // (ленд залит не через систему) — открывает тест-кампанию и действия задачи.
+  keitaroLinkOffer: (sid: string, lid: string, offer_id: number) =>
+    request<KeitaroRenameResult>(`/api/sessions/${encodeURIComponent(sid)}/landers/${encodeURIComponent(lid)}/keitaro-link`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ offer_id }),
+    }),
   keitaroRename: (sid: string, lid: string, offer_id: number, type?: string, adult?: boolean) =>
     request<KeitaroRenameResult>(`/api/sessions/${encodeURIComponent(sid)}/landers/${encodeURIComponent(lid)}/keitaro-rename`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ offer_id, type: type || null, adult: !!adult }),
     }),
+  // Заменить архив ленда в УЖЕ созданном оффере (правки после заливки).
+  keitaroUpdateArchive: (sid: string, lid: string) =>
+    request<{ offer_id: number; offer_name: string; zip: string; mode: string }>(
+      `/api/sessions/${encodeURIComponent(sid)}/landers/${encodeURIComponent(lid)}/keitaro-update-archive`,
+      { method: 'POST' }),
+  // Массовая заливка всех готовых лендов сессии (фон) + статус для прогресс-бара.
+  bulkUploadStart: (sid: string, lids?: string[]) =>
+    request<BulkUploadStatus>(`/api/sessions/${encodeURIComponent(sid)}/keitaro-upload-all`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ lids: lids || null }),
+    }),
+  bulkUploadStatus: (sid: string) =>
+    request<BulkUploadStatus>(`/api/sessions/${encodeURIComponent(sid)}/keitaro-upload-all/status`),
+  // Остановка: текущий ленд дозаливается, остальные из очереди отменяются.
+  bulkUploadStop: (sid: string) =>
+    request<BulkUploadStatus>(`/api/sessions/${encodeURIComponent(sid)}/keitaro-upload-all/stop`,
+      { method: 'POST' }),
+  // Конвертация всех изображений ленда в WebP (результат = новый output).
+  optimizeWebp: (sid: string, lid: string) =>
+    request<{ success: boolean; output_name?: string; output_url?: string; status?: string;
+              size_before?: number; size_after?: number; log: LogLine[]; error?: string }>(
+      `/api/sessions/${encodeURIComponent(sid)}/landers/${encodeURIComponent(lid)}/optimize-webp`,
+      { method: 'POST' }),
+  // Переименование файла внутри архива (редактор кода) + обновление ссылок.
+  previewRenameFile: (zipName: string, path: string, newName: string) =>
+    request<{ success: boolean; path: string; old_path: string; refs_updated: number }>(
+      `/api/preview/${encodeURIComponent(zipName)}/file/rename`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path, new_name: newName }),
+      }),
 
   // ── VSL: конфиг, фото продукта, видео ────────────────
   vslConfig: (sid: string, lid: string) =>

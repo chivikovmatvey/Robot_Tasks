@@ -74,12 +74,24 @@ def apply_dom_replacements(html_text: str, rules: list[dict], image_map: dict) -
 
         # ── ПРОДУКТ ──────────────────────────────────────────────────────────
         if label == 'ПРОДУКТ':
-            result, n = _outside(result, find_str, repl_str)
+            # Регистр не важен: на ленде продукт встречается и «Diafast»,
+            # и «DIAFAST» (заголовки), и «diafast» — меняем ВСЕ варианты,
+            # перенося регистр найденного на новое название. Границы слова
+            # обязательны, иначе ci-поиск залезет внутрь обычных слов
+            # («Vita» в «vitaminas»).
+            result, n = _outside(result, find_str, repl_str, ci=True)
             if n == 0:
                 soup = BeautifulSoup(result, 'html.parser')
-                result, n = _split_text(result, soup, find_str, repl_str)
+                result, n = _split_text(result, soup, find_str, repl_str, ci=True)
             # Имя продукта используется и в атрибуте data-product-name (виджет формы)
-            result, na = _named_attr(result, 'data-product-name', find_str, repl_str)
+            result, na = _named_attr(result, 'data-product-name', find_str, repl_str,
+                                     ci=True)
+            # Видимые текстовые атрибуты: alt/title/aria-label/placeholder — там
+            # тоже остаётся имя донора (alt="Biosulin" у фото продукта).
+            # URL-атрибуты (src/href/content) НЕ трогаем — сломаются пути.
+            for attr in ('alt', 'title', 'aria-label', 'placeholder'):
+                result, nt = _named_attr(result, attr, find_str, repl_str, ci=True)
+                na += nt
             total += n + na
 
         # ── PROD_IMG ─────────────────────────────────────────────────────────

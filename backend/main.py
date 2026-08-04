@@ -72,6 +72,20 @@ async def lifespan(app: FastAPI):
     except Exception:  # noqa: BLE001
         pass
 
+    # Повисшие статусы: поток адаптации/скачивания не переживает перезапуск
+    # воркера (в т.ч. авто-reload), а ленд оставался в 'adapting' навсегда —
+    # фронт бесконечно опрашивал сессию, и это выглядело как «зависло».
+    try:
+        from services.session import get_manager
+        stale = get_manager().reset_stale_statuses()
+        if stale:
+            import logging
+            logging.getLogger("session").warning(
+                "Сброшены повисшие статусы после перезапуска: %s", stale)
+    except Exception:  # noqa: BLE001
+        import logging
+        logging.getLogger("session").exception("Не удалось сбросить повисшие статусы")
+
     if intake is not None:
         import os
         interval = int(os.getenv("POLL_INTERVAL", "60") or "60")
@@ -1183,7 +1197,7 @@ def vsl_comments_apply(sid: str, lid: str, body: VslCommentsApplyBody):
 
 
 class VslCommentsTranslateBody(BaseModel):
-    target_lang: Optional[str] = Field(None, description="Язык (пусто = по гео)")
+    target_lang: str | None = Field(None, description="Язык (пусто = по гео)")
 
 
 @app.post("/api/sessions/{sid}/landers/{lid}/vsl/comments/translate")
@@ -1466,6 +1480,8 @@ def keitaro_upload(sid: str, lid: str, body: KeitaroUploadBody):
     except ValueError as e:
         raise HTTPException(422, str(e))
     except Exception as e:  # noqa: BLE001
+        _logging.getLogger("keitaro.upload").exception(
+            "Заливка ленда %s/%s провалилась", sid, lid)
         raise HTTPException(502, f"Keitaro: {e}")
 
 
@@ -1487,7 +1503,33 @@ def keitaro_rename(sid: str, lid: str, body: KeitaroRenameBody):
     except ValueError as e:
         raise HTTPException(422, str(e))
     except Exception as e:  # noqa: BLE001
+        _logging.getLogger("keitaro.upload").exception(
+            "Переименование оффера %s (%s/%s) не удалось", body.offer_id, sid, lid)
         raise HTTPException(502, f"Keitaro: {e}")
+
+
+class KeitaroLinkBody(BaseModel):
+    offer_id: int = Field(..., description="Номер оффера в Keitaro, вписанный вручную")
+
+
+@app.post("/api/sessions/{sid}/landers/{lid}/keitaro-link")
+def keitaro_link(sid: str, lid: str, body: KeitaroLinkBody):
+    """Привязывает к ленду УЖЕ существующий оффер Keitaro по номеру (вручную).
+
+    Ничего не создаёт и не переименовывает — только проверяет наличие оффера и
+    берёт его название. Нужно, чтобы для ленда, залитого не через систему, можно
+    было создать тестовую кампанию и добавить вариант в задачу."""
+    from services.keitaro_upload import link_existing_offer
+    try:
+        return link_existing_offer(sid, lid, body.offer_id)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    except Exception as e:  # noqa: BLE001
+        _logging.getLogger("keitaro.upload").exception(
+            "Привязка оффера %s к %s/%s не удалась", body.offer_id, sid, lid)
+        # «Оффера с таким id НЕТ» — ошибка пользователя, а не Keitaro.
+        msg = str(e)
+        raise HTTPException(422 if "НЕТ в Keitaro" in msg else 502, f"Keitaro: {msg}")
 
 
 def _resolve_lander_task(sid: str, lid: str):
@@ -1589,7 +1631,72 @@ def keitaro_test_campaign(sid: str, lid: str):
     except ValueError as e:
         raise HTTPException(422, str(e))
     except Exception as e:  # noqa: BLE001
+        _logging.getLogger("keitaro.upload").exception(
+            "Тестовая кампания для %s/%s не создана", sid, lid)
         raise HTTPException(502, f"Keitaro: {e}")
+
+
+@app.post("/api/sessions/{sid}/landers/{lid}/keitaro-update-archive")
+def keitaro_update_archive(sid: str, lid: str):
+    """Заливает актуальный архив ленда в УЖЕ созданный оффер (замена ленда
+    после правок — название/группа/страна оффера не меняются)."""
+    from services.keitaro_upload import update_offer_archive
+    try:
+        return update_offer_archive(sid, lid)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    except Exception as e:  # noqa: BLE001
+        _logging.getLogger("keitaro.upload").exception(
+            "Обновление архива оффера (%s/%s) не удалось", sid, lid)
+        raise HTTPException(502, f"Keitaro: {e}")
+
+
+# ── Массовая заливка всех лендов сессии ──────────────────────
+class BulkUploadBody(BaseModel):
+    lids: list[str] | None = Field(None, description="Ленды (None = все подходящие)")
+
+
+@app.post("/api/sessions/{sid}/keitaro-upload-all")
+def keitaro_upload_all(sid: str, body: BulkUploadBody | None = None):
+    """Запускает фоновую последовательную заливку всех готовых (и ещё не
+    залитых) лендов сессии: оффер → переименование → тестовая кампания."""
+    from services import bulk_upload
+    try:
+        return bulk_upload.start(sid, (body.lids if body else None))
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+
+
+@app.get("/api/sessions/{sid}/keitaro-upload-all/status")
+def keitaro_upload_all_status(sid: str):
+    """Статус массовой заливки (для кругового прогресс-бара + ссылок)."""
+    from services import bulk_upload
+    return bulk_upload.get_status(sid)
+
+
+@app.post("/api/sessions/{sid}/keitaro-upload-all/stop")
+def keitaro_upload_all_stop(sid: str):
+    """Останавливает массовую заливку: текущий ленд дозаливается, остальные
+    из очереди отменяются (обрыв на полушаге оставил бы мусор в Keitaro)."""
+    from services import bulk_upload
+    try:
+        return bulk_upload.stop(sid)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+
+
+@app.post("/api/sessions/{sid}/landers/{lid}/optimize-webp")
+def lander_optimize_webp(sid: str, lid: str):
+    """Конвертирует все изображения ленда в WebP (результат = новый output)."""
+    from services.session import get_manager
+    try:
+        return get_manager().optimize_webp(sid, lid)
+    except (ValueError, KeyError) as e:
+        raise HTTPException(422, str(e))
+    except Exception as e:  # noqa: BLE001
+        _logging.getLogger("session").exception(
+            "WebP-оптимизация %s/%s упала", sid, lid)
+        raise HTTPException(500, f"Optimize: {e}")
 
 
 # ── История опубликованных лендов ────────────────────────────
@@ -1649,6 +1756,10 @@ def keitaro_upload_stream(sid: str, lid: str, body: KeitaroUploadBody):
                          on_progress=_progress)
             q.put({"type": "done", "result": res})
         except Exception as e:  # noqa: BLE001
+            # В лог — с трейсом: раньше ошибка уходила ТОЛЬКО в SSE, и в логе
+            # бэкенда заливка обрывалась на последнем шаге без причины.
+            _logging.getLogger("keitaro.upload").exception(
+                "Заливка ленда %s/%s провалилась", sid, lid)
             q.put({"type": "error", "error": str(e)})
         finally:
             q.put(None)

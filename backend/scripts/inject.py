@@ -135,6 +135,70 @@ def form_bottom(country: str, language: str, exclude_word: str) -> str:
     <input type="hidden" name="offerId" value="{{offer_id}}">
 """
 
+
+# Наши hidden-инпуты (регламент §5.3). Любой ДРУГОЙ hidden внутри формы —
+# чужой (сохранённые subid/fbclid/utm_* донора, s1/s2, webmaster_id и т.п.):
+# уходит с заявкой мусором и ломает приём. Вычищаем.
+_OUR_HIDDEN = {"click_data", "thx_page", "language", "country", "exclude_word",
+               "utm_campaign", "subid", "offerId", "offer_id"}
+
+
+def _strip_foreign_hidden(form_body: str) -> tuple[str, int]:
+    """Удаляет из тела формы чужие hidden-инпуты (и наши с «зашитыми» значениями
+    вместо макросов — их переставит form_bottom). → (тело, сколько удалено)."""
+    removed = 0
+
+    def repl(m: re.Match) -> str:
+        nonlocal removed
+        tag = m.group(0)
+        tp = re.search(r'type=["\']([^"\']*)["\']', tag, re.I)
+        if not tp or tp.group(1).lower() != "hidden":
+            return tag
+        nm = re.search(r'name=["\']([^"\']*)["\']', tag, re.I)
+        name = nm.group(1) if nm else ""
+        if name in ("click_data", "thx_page"):
+            return tag  # верхняя пара — вставляется/уже наша
+        if name in _OUR_HIDDEN:
+            # наш по имени, но значение должно быть макросом/кодом гео, а не
+            # зашитым субайди донора: subid="1fabsvh…" → удалить (переставим).
+            val = re.search(r'value=["\']([^"\']*)["\']', tag, re.I)
+            v = val.group(1) if val else ""
+            if name == "subid" and "{subid}" not in v:
+                removed += 1
+                return ""
+            if name in ("utm_campaign", "offerId", "offer_id") and "{offer_id}" not in v:
+                removed += 1
+                return ""
+            return tag
+        removed += 1
+        return ""
+
+    return re.sub(r'<input\b[^>]*/?>', repl, form_body, flags=re.I), removed
+
+
+def _strip_honeypots(form_body: str) -> tuple[str, int]:
+    """Удаляет honeypot-инпуты (невидимые поля-ловушки: aria-hidden,
+    tabindex=-1, style с left:-9999px/display:none). Иначе fix_form_inputs
+    ставит им required — и невидимое обязательное поле блокирует submit."""
+    removed = 0
+
+    def repl(m: re.Match) -> str:
+        nonlocal removed
+        tag = m.group(0)
+        tp = re.search(r'type=["\']([^"\']*)["\']', tag, re.I)
+        if tp and tp.group(1).lower() == "hidden":
+            return tag  # обычный hidden — не honeypot, им занимается др. фильтр
+        low = tag.lower()
+        if ('aria-hidden="true"' in low or "aria-hidden='true'" in low
+                or 'tabindex="-1"' in low or "tabindex='-1'" in low
+                or re.search(r'style=["\'][^"\']*(?:-9999px|display:\s*none|'
+                             r'visibility:\s*hidden)', low)):
+            removed += 1
+            return ""
+        return tag
+
+    return re.sub(r'<input\b[^>]*/?>', repl, form_body, flags=re.I), removed
+
 def body_end(country: str, language: str,
              price_new: str, price_old: str, prod_img: str,
              exclude_word: str = '', product_name: str = '') -> str:
@@ -397,15 +461,47 @@ def inject_html(html: str, checks: dict, params: dict) -> tuple[str, list]:
             # Часть до формы
             result.append(html[pos:abs_open_start])
 
-            # Открывающий тег — фиксируем action=""
+            # Открывающий тег — фиксируем action="" и id="form" (регламент §5.3:
+            # <form action="" method="POST" id="form">; чужой id вроде
+            # "order_form" ломает якоря и привязку виджета — реальный кейс
+            # luminaeterna: id="order_form" → обвязка не работала).
             open_tag = html[abs_open_start:abs_open_end]
             open_tag = re.sub(r'action=["\'][^"\']*["\']', 'action=""', open_tag)
             if 'action=' not in open_tag:
                 open_tag = open_tag.replace('<form', '<form action=""', 1)
+            old_id = re.search(r'id=["\']([^"\']*)["\']', open_tag, re.IGNORECASE)
+            if old_id and old_id.group(1) != 'form':
+                open_tag = re.sub(r'id=["\'][^"\']*["\']', 'id="form"', open_tag,
+                                  count=1, flags=re.IGNORECASE)
+                # старый id сохраняем классом — на него могут ссылаться стили
+                cls = re.search(r'class=["\']([^"\']*)["\']', open_tag, re.IGNORECASE)
+                if cls:
+                    if old_id.group(1) not in cls.group(1).split():
+                        open_tag = re.sub(r'(class=["\'])',
+                                          rf'\g<1>{old_id.group(1)} ', open_tag,
+                                          count=1, flags=re.IGNORECASE)
+                else:
+                    open_tag = open_tag.replace('<form', f'<form class="{old_id.group(1)}"', 1)
+                if 'form id="form"' not in form_added:
+                    form_added.append('form id="form"')
+            elif not old_id:
+                open_tag = open_tag.replace('<form', '<form id="form"', 1)
+                if 'form id="form"' not in form_added:
+                    form_added.append('form id="form"')
             result.append(open_tag)
 
             # Тело формы
             form_body = html[abs_open_end:close_pos]
+
+            # Чужие hidden (сохранённые subid/fbclid/utm_* донора) и honeypot'ы
+            # — удаляем ДО проверок «есть ли наш инпут»: чужой name="country"
+            # раньше маскировал отсутствие всего нашего набора.
+            form_body, n_foreign = _strip_foreign_hidden(form_body)
+            if n_foreign and 'чужие hidden удалены' not in ' '.join(form_added):
+                form_added.append(f'чужие hidden удалены ({n_foreign})')
+            form_body, n_honey = _strip_honeypots(form_body)
+            if n_honey:
+                form_added.append(f'honeypot удалён ({n_honey})')
 
             # Добавляем click_data + thx_page в начало если нет
             if 'name="click_data"' not in form_body and 'name="thx_page"' not in form_body:
@@ -413,13 +509,27 @@ def inject_html(html: str, checks: dict, params: dict) -> tuple[str, list]:
                 if 'click_data + thx_page' not in form_added:
                     form_added.append('click_data + thx_page')
 
-            # Добавляем language/country/exclude перед </form> если нет
-            if ('name="language"' not in form_body
-                    or 'name="country"' not in form_body
-                    or 'name="exclude_word"' not in form_body):
-                form_body = form_body + form_bottom(country, language, exclude)
-                if 'language / country / exclude_word' not in form_added:
-                    form_added.append('language / country / exclude_word / utm / subid')
+            # Добавляем НЕДОСТАЮЩИЕ hidden перед </form> — по одному, а не
+            # «все или ничего» (чужой name="country" раньше блокировал вставку
+            # language/exclude_word/utm_campaign/subid/offerId целиком).
+            bottom_all = {
+                'language': f'    <input type="hidden" name="language" value="{language}">\n',
+                'country': f'    <input type="hidden" name="country" value="{country}">\n',
+                'exclude_word': f'    <input type="hidden" name="exclude_word" value="{exclude}">\n',
+                'utm_campaign': '    <input type="hidden" name="utm_campaign" value="{offer_id}">\n',
+                'subid': '    <input type="hidden" name="subid" value="{subid}">\n',
+                'offerId': '    <input type="hidden" name="offerId" value="{offer_id}">\n',
+            }
+            missing = [k for k in bottom_all
+                       if f'name="{k}"' not in form_body
+                       # offerId мог остаться донорским offer_id — его
+                       # переименует шаг 7a, дубль не нужен
+                       and not (k == 'offerId' and 'name="offer_id"' in form_body)]
+            if missing:
+                form_body = form_body + ''.join(bottom_all[k] for k in missing)
+                lbl = 'hidden: ' + '/'.join(missing)
+                if lbl not in form_added:
+                    form_added.append(lbl)
 
             result.append(form_body)
             result.append('</form>')
@@ -681,6 +791,42 @@ def ask_params(checks: dict) -> dict | None:
 
 PHP_EXT  = {'.php', '.html', '.htm'}
 
+_IMG_EXT = {'.png', '.webp', '.jpg', '.jpeg', '.gif'}
+
+
+def _resolve_prod_img(src: Path, params: dict) -> None:
+    """Фолбэк фото продукта для виджета: если указанного файла нет в архиве
+    (частый кейс — дефолт 'product.webp' у сырого ленда), берём реальный файл:
+    сперва largest-картинку c именем продукта, затем просто крупнейшую в корне.
+    Иначе data-product-image указывает в пустоту и виджет без фото."""
+    want = (params.get('prod_img') or '').strip()
+    names = {p.name for p in src.rglob('*') if p.is_file()}
+    if want and Path(want).name in names:
+        return
+    # Донорский виджет уже знал фото продукта — лучший источник.
+    for fp in src.rglob('*'):
+        if fp.suffix.lower() in PHP_EXT and fp.is_file():
+            m = re.search(r'data-product-image="([^"{}]+)"',
+                          fp.read_text(encoding='utf-8', errors='replace'))
+            if m and Path(m.group(1)).name in names:
+                params['prod_img'] = m.group(1)
+                return
+    product = (params.get('product_name') or '').lower().replace(' ', '')
+    candidates = [p for p in src.rglob('*')
+                  if p.is_file() and p.suffix.lower() in _IMG_EXT
+                  and not p.name.startswith(('avatar', 'icon', 'favicon', '_preview'))]
+    if not candidates:
+        return
+    def score(p: Path) -> tuple:
+        nm = p.name.lower().replace('-', '').replace('_', '')
+        by_name = product and product in nm
+        by_hint = any(h in nm for h in ('product', 'prod', 'pack', 'bottle'))
+        return (by_name, by_hint, p.stat().st_size)
+    best = max(candidates, key=score)
+    params['prod_img'] = best.name
+    warn(f"фото продукта «{want or '—'}» нет в архиве — виджету подставлен {best.name}")
+
+
 def process_zip(zip_path: str, params: dict) -> str:
     """Обрабатывает архив, возвращает путь к результату."""
 
@@ -691,6 +837,8 @@ def process_zip(zip_path: str, params: dict) -> str:
 
         with zipfile.ZipFile(zip_path, 'r') as zf:
             zf.extractall(src)
+
+        _resolve_prod_img(src, params)
 
         total_added = []
         html_texts: list[str] = []   # итоговые html — для проверки ссылок на бандлы

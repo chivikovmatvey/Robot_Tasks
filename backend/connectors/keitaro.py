@@ -2,8 +2,10 @@
 
 У аккаунта нет Admin API — скачивание/заливка лендов делается только в UI,
 поэтому работаем через headless-браузер: логинимся, ищем оффер по ID в гриде
-«Офферы» и жмём кнопку «Скачать» (data-test-id="download-button"), перехватывая
-скачивание ZIP.
+«Офферы», открываем модалку «Редактирование оффера» (клик по ячейке названия) и
+жмём в ней кнопку «Скачать» (data-test-id="download-button"), перехватывая
+скачивание ZIP. До обновления Keitaro 2026-07-31 эта кнопка была прямо в строке
+грида — старый путь оставлен фолбэком.
 
 Пока реализована только проверка доступа + скачивание ленда. Заливка будет
 добавлена позже.
@@ -220,6 +222,21 @@ class KeitaroClient:
 
     # ── offers ───────────────────────────────────────────────────
     _GRID_READY = '[data-test-id="grid-body"], tr.grid-tbody-row'
+    # Структура строки грида офферов (Keitaro обновился 2026-07-31):
+    #   <tr class="grid-row grid-tbody-row">
+    #     <td class="… grid-cell-id">      <div class="grid-cell-inner">21425</div>
+    #     <td class="… grid-cell-name grid-cell-clickable" title="Broten […] […]">
+    # Ссылки `a[href$="/editor/offer/<id>"]` и построчных кнопок («Скачать»,
+    # «Редактировать») в строке БОЛЬШЕ НЕТ — id берём из ячейки grid-cell-id,
+    # а все действия идут через модалку «Редактирование оффера» (открывается
+    # кликом по ячейке названия). Старые селекторы оставлены фолбэком на случай
+    # отката версии Keitaro.
+    _ROW = "tr.grid-tbody-row"
+    _ID_CELL = "td.grid-cell-id"
+    _NAME_CELL = "td.grid-cell-name"
+    # «В гриде появились строки офферов» — новый и старый варианты разметки.
+    _ROWS_READY = ('tr.grid-tbody-row td.grid-cell-id, '
+                   'tr.grid-tbody-row a[href*="/editor/offer/"]')
     # Фильтр ВНУТРИ грида (не глобальный поиск в шапке навбара!).
     _GRID_FILTER = (
         'input.search-filter, [data-test-id="grid-toolbar"] input[type="search"]'
@@ -231,12 +248,28 @@ class KeitaroClient:
 
     def _apply_grid_filter(self, value: str) -> None:
         """Вводит значение в фильтр грида и ждёт догрузки результатов по ПОЛНОМУ
-        запросу (debounce-settle). Использовать перед чтением строк."""
-        filt = self.page.locator(self._GRID_FILTER).first
-        filt.wait_for(state="visible", timeout=10_000)
-        filt.fill("")
-        filt.fill(str(value))
-        self.page.wait_for_timeout(self._GRID_SETTLE_MS)
+        запросу (debounce-settle). Использовать перед чтением строк.
+
+        ВАЖНО: у fill/wait_for ЯВНЫЕ таймауты. Дефолтный таймаут страницы —
+        KEITARO_TIMEOUT_MS (90с): без явного значения `fill` по перерисовывающемуся
+        гриду (после закрытия модалки создания оффера грид сам обновляется, input
+        пересоздаётся) висел все 90с и валил заливку молча. Одна повторная попытка.
+        """
+        last: Optional[Exception] = None
+        for attempt in range(2):
+            try:
+                filt = self.page.locator(self._GRID_FILTER).first
+                filt.wait_for(state="visible", timeout=10_000)
+                filt.fill("", timeout=10_000)
+                filt.fill(str(value), timeout=10_000)
+                self.page.wait_for_timeout(self._GRID_SETTLE_MS)
+                return
+            except Exception as e:  # noqa: BLE001
+                last = e
+                log.warning("Фильтр грида не принял «%s» (%d/2): %s",
+                            value, attempt + 1, e)
+                self.page.wait_for_timeout(1_000)
+        raise KeitaroError(f"Не удалось применить фильтр грида «{value}»: {last}")
 
     def _open_offers(self) -> None:
         page = self.page
@@ -315,6 +348,28 @@ class KeitaroClient:
         )
         return {str(r.get("id")): (r.get("name") or "").strip() for r in rows}
 
+    def _offers_by_name_api(self, needle: str, *, limit: int = 50) -> list[dict]:
+        """Офферы, чьё НАЗВАНИЕ содержит `needle` (тот же фильтр, что у поля
+        поиска над гридом, но без DOM: одним POST и без debounce)."""
+        return self._offers_api(
+            [{"name": "name", "operator": "CONTAINS", "expression": needle}],
+            limit=limit)
+
+    def _max_offer_id_by_name(self, needle: str) -> Optional[int]:
+        """Максимальный id среди офферов с `needle` в названии (снимок ДО создания).
+
+        Нужен как граница «свежести»: оффер, созданный нами, обязан иметь id
+        БОЛЬШЕ этого снимка. Защищает от того, что при неудаче мы примем за свой
+        старый оффер-дубль с тем же названием (их у продукта бывает несколько).
+        """
+        try:
+            rows = self._offers_by_name_api(needle, limit=50)
+        except Exception as e:  # noqa: BLE001
+            log.warning("Снимок max id по «%s» не снят: %s", needle, e)
+            return None
+        ids = [int(r["id"]) for r in rows if str(r.get("id") or "").isdigit()]
+        return max(ids) if ids else None
+
     def _filter_grid_by_api_name(self, offer_id: int | str) -> str:
         """Фолбэк, когда фильтр грида по id ничего не нашёл: берём точное
         название оффера по РЕАЛЬНОМУ id через внутренний API и фильтруем грид
@@ -341,34 +396,113 @@ class KeitaroClient:
         self._apply_grid_filter(name)
         return name
 
+    def _wait_offer_row(self, offer_id: int | str, *, timeout_ms: int = 15_000):
+        """Ждёт строку оффера в гриде и возвращает её локатор.
+
+        Строку ищем по СНИМКУ строк (`_grid_rows_data`) и берём `.nth(i)`, а не
+        CSS-селектором с текстом: `td.grid-cell-id:text-is("21425")` не
+        срабатывает — текст лежит во вложенном `div.grid-cell-inner`, и
+        текстовый движок Playwright отдаёт «самый маленький» элемент, т.е. div,
+        а не td. Снимок заодно покрывает и старую разметку (id из ссылки на
+        редактор). Бросает PWTimeout, если строка так и не появилась."""
+        oid = str(offer_id).strip()
+        deadline = time.monotonic() + timeout_ms / 1000
+        while True:
+            for i, r in enumerate(self._grid_rows_data()):
+                if str(r.get("id") or "").strip() == oid:
+                    return self.page.locator(self._ROW).nth(i)
+            if time.monotonic() >= deadline:
+                raise PWTimeout(f"Строка оффера {offer_id} не появилась в гриде")
+            self.page.wait_for_timeout(400)
+
     def _find_offer_row(self, offer_id: int | str):
         """Возвращает локатор строки грида для оффера с данным KT-id.
 
         Поле поиска грида ищет ТОЛЬКО по названию (name CONTAINS) — обычно этого
         хватает, т.к. название начинается с id. Если пусто — фолбэк через
         внутренний API по РЕАЛЬНОМУ id (см. _filter_grid_by_api_name)."""
-        page = self.page
         # Фильтр грида сужает выдачу (грид постраничный, 16k+ офферов).
-        filt = page.locator(self._GRID_FILTER).first
-        filt.wait_for(state="visible", timeout=10_000)
-        filt.fill("")
-        filt.fill(str(offer_id))
+        # Именно _apply_grid_filter, а не голый fill: он ждёт debounce-settle,
+        # иначе строки читаются из ЕЩЁ НЕ обновлённого грида (в свежем гриде
+        # сверху лежат самые новые офферы — можно поймать чужую строку).
+        self._apply_grid_filter(str(offer_id))
 
-        edit_link = page.locator(f'a[href$="/editor/offer/{offer_id}"]').first
         try:
-            edit_link.wait_for(state="visible", timeout=15_000)
+            return self._wait_offer_row(offer_id)
         except PWTimeout:
-            self._filter_grid_by_api_name(offer_id)
-            try:
-                edit_link.wait_for(state="visible", timeout=15_000)
-            except PWTimeout:
-                self._dump_debug(f"offer-{offer_id}-not-found")
+            pass
+        # Название оффера может не содержать его id (свежесозданный или опечатка
+        # при переименовании) — берём точное название по id через API.
+        self._filter_grid_by_api_name(offer_id)
+        try:
+            return self._wait_offer_row(offer_id)
+        except PWTimeout:
+            self._dump_debug(f"offer-{offer_id}-not-found")
+            raise KeitaroError(
+                f"Оффер {offer_id} не найден в гриде даже по названию")
+
+    def _assert_row_is(self, row, offer_id: int | str) -> None:
+        """Проверяет, что строка действительно принадлежит офферу offer_id."""
+        oid = str(offer_id).strip()
+        try:
+            id_cell = row.locator(self._ID_CELL).first
+            if id_cell.count():
+                shown = (id_cell.inner_text(timeout=3_000) or "").strip()
+                if shown and shown != oid:
+                    self._dump_debug(f"offer-{oid}-row-mismatch")
+                    raise KeitaroError(
+                        f"Строка грида принадлежит офферу {shown}, а не {oid} — "
+                        f"грид перерисовался, действие отменено")
+                return
+            # Старая разметка: сверяем по ссылке на редактор.
+            if not row.locator(f'a[href$="/editor/offer/{oid}"]').count():
                 raise KeitaroError(
-                    f"Оффер {offer_id} не найден в гриде даже по названию")
-        # Строка-предок этой ссылки.
-        return page.locator(
-            f'tr.grid-tbody-row:has(a[href$="/editor/offer/{offer_id}"])'
-        ).first
+                    f"Не удалось подтвердить, что строка принадлежит офферу {oid}")
+        except KeitaroError:
+            raise
+        except Exception as e:  # noqa: BLE001
+            log.warning("Сверка строки оффера %s не удалась: %s", oid, e)
+
+    def _open_offer_modal(self, row, offer_id: int | str):
+        """Открывает модалку «Редактирование оффера» кликом по ячейке названия.
+
+        Иконки «Редактировать» в строке нет (и раньше она не реагировала), сама
+        ячейка названия — не ссылка, а `td.grid-cell-name.grid-cell-clickable`.
+        Перед кликом СВЕРЯЕТ id в строке: строка адресуется по индексу снимка
+        грида, а грид может перерисоваться — открыть чужой оффер (и, при
+        переименовании, переименовать его) недопустимо.
+        Возвращает локатор модалки."""
+        page = self.page
+        self._assert_row_is(row, offer_id)
+        name_td = row.locator(self._NAME_CELL).first
+        if not name_td.count():
+            # Старая разметка: ячейка названия — самая длинная td со скобкой.
+            tds = row.locator("td")
+            best = -1
+            for i in range(tds.count()):
+                txt = (tds.nth(i).inner_text() or "").strip()
+                if "[" in txt and len(txt) > best:
+                    best = len(txt)
+                    name_td = tds.nth(i)
+            if best < 0:
+                self._dump_debug(f"offer-{offer_id}-no-name-td")
+                raise KeitaroError(f"Не нашёл ячейку-название оффера {offer_id}")
+        name_td.click()
+        page.wait_for_selector('text=Редактирование оффера', timeout=15_000)
+        return page.locator(".modal-content").last
+
+    def _close_offer_modal(self) -> None:
+        """Закрывает модалку БЕЗ сохранения (Отмена → Escape)."""
+        page = self.page
+        try:
+            page.locator('.modal-content button:has-text("Отмена")').first.click(
+                timeout=4_000)
+        except Exception:  # noqa: BLE001
+            try:
+                page.keyboard.press("Escape")
+            except Exception:  # noqa: BLE001
+                pass
+        page.wait_for_timeout(500)
 
     @staticmethod
     def _extract_offer_name(txt: str, offer_id: int | str) -> str:
@@ -386,6 +520,22 @@ class KeitaroClient:
         if with_id:
             return max(with_id, key=len)
         return max(lines, key=len) if lines else (txt or "").strip()
+
+    def _row_offer_name(self, row, offer_id: int | str) -> str:
+        """Название оффера из строки грида: сперва `title` ячейки названия
+        (точное значение), иначе разбор текста строки."""
+        try:
+            name_td = row.locator(self._NAME_CELL).first
+            if name_td.count():
+                title = (name_td.get_attribute("title") or "").strip()
+                if title:
+                    return title
+                txt = (name_td.inner_text() or "").strip()
+                if txt:
+                    return txt
+        except Exception:  # noqa: BLE001
+            pass
+        return self._extract_offer_name(row.inner_text() or "", offer_id)
 
     def get_offer_name(self, offer_id: int | str) -> str:
         """Best-effort: название оффера-донора (содержит продукт/вертикаль/гео)."""
@@ -409,7 +559,7 @@ class KeitaroClient:
                         key, e)
         self._open_offers()
         row = self._find_offer_row(offer_id)
-        name = self._extract_offer_name(row.inner_text() or "", offer_id)
+        name = self._row_offer_name(row, offer_id)
         self._name_cache[key] = name
         return name
 
@@ -439,7 +589,7 @@ class KeitaroClient:
         for key in keys:
             try:
                 row = self._find_offer_row(key)
-                out[key] = self._extract_offer_name(row.inner_text() or "", key)
+                out[key] = self._row_offer_name(row, key)
             except Exception as e:  # noqa: BLE001
                 log.warning("Не получить название оффера %s: %s", key, e)
                 out[key] = None
@@ -464,23 +614,41 @@ class KeitaroClient:
         # повторный проход по гриду (это удваивало время на каждый ленд).
         try:
             self._name_cache[str(offer_id).strip()] = \
-                self._extract_offer_name(row.inner_text() or "", offer_id)
+                self._row_offer_name(row, offer_id)
         except Exception:  # noqa: BLE001
             pass
 
+        # Построчной кнопки «Скачать» в гриде БОЛЬШЕ НЕТ (обновление Keitaro
+        # 2026-07-31) — она живёт в модалке «Редактирование оффера», которая
+        # открывается кликом по ячейке названия (как при переименовании).
+        # Сперва пробуем строку (старая разметка), затем модалку.
         dl_btn = row.locator('button[data-test-id="download-button"]').first
+        in_modal = False
+        if not dl_btn.count():
+            _t("кнопки скачивания в строке нет → открываю модалку оффера")
+            modal = self._open_offer_modal(row, offer_id)
+            in_modal = True
+            dl_btn = self._modal_download_button(modal, offer_id)
         try:
             dl_btn.wait_for(state="visible", timeout=10_000)
         except PWTimeout:
             self._dump_debug(f"offer-{offer_id}-no-download-button")
+            if in_modal:
+                self._close_offer_modal()
             raise KeitaroError(
-                f"Кнопка скачивания не найдена в строке оффера {offer_id} "
+                f"Кнопка скачивания не найдена для оффера {offer_id} "
                 f"(см. debug-скрин в storage/keitaro)")
         _t("кнопка скачивания видна → клик и ожидание загрузки")
 
-        with self.page.expect_download(timeout=self.timeout_ms) as dl_info:
-            dl_btn.click()
-        download = dl_info.value
+        try:
+            with self.page.expect_download(timeout=self.timeout_ms) as dl_info:
+                dl_btn.click()
+            download = dl_info.value
+        finally:
+            # Модалку закрываем ВСЕГДА (в т.ч. при ошибке) — иначе она перекроет
+            # грид следующему ленду в том же сеансе браузера.
+            if in_modal:
+                self._close_offer_modal()
         _t("загрузка началась → сохраняю файл")
 
         dest_dir = Path(dest_dir)
@@ -490,6 +658,33 @@ class KeitaroClient:
         download.save_as(str(target))
         _t(f"готово: {target.name} ({target.stat().st_size} б)")
         return target
+
+    def _modal_download_button(self, modal, offer_id: int | str):
+        """Кнопка «Скачать» внутри модалки оффера.
+
+        Разметка: <button data-test-id="download-button" title="Скачать"
+        class="btn btn-link btn-lg"><span class="k-icon-ion-lg">…</span></button>.
+        Живёт на вкладке «Основные» (открыта по умолчанию); если модалка
+        открылась на другой вкладке — переключаемся и ищем снова.
+
+        Данные оффера (и блок ленда с кнопкой) подгружаются АСИНХРОННО — ждём
+        появления кнопки до 8с, прежде чем щёлкать вкладки."""
+        btn = modal.locator('[data-test-id="download-button"]').first
+        deadline = time.monotonic() + 8
+        while not btn.count() and time.monotonic() < deadline:
+            self.page.wait_for_timeout(400)
+        if btn.count():
+            return btn
+        try:
+            modal.locator('a.nav-link:has-text("Основные")').first.click(timeout=4_000)
+            self.page.wait_for_timeout(600)
+        except Exception:  # noqa: BLE001
+            pass
+        btn = modal.locator('[data-test-id="download-button"]').first
+        if btn.count():
+            return btn
+        # Последний шанс: кнопка по подсказке «Скачать» где угодно в модалке.
+        return modal.locator('button[title="Скачать"]').first
 
     # ══════════════════════════════════════════════════════════════
     # СОЗДАНИЕ ОФФЕРА (заливка ленда)
@@ -537,6 +732,14 @@ class KeitaroClient:
         {network, bracket, source_name} (значения могут быть None).
         """
         self.login()
+        # Быстрый путь: внутренний API грида — он отдаёт и название, и номер
+        # партнёрской сети (affiliate_network) готовым полем, без DOM, фильтра с
+        # debounce и виртуализированных строк.
+        try:
+            return self._offer_meta_via_api(product, geo_code)
+        except Exception as e:  # noqa: BLE001
+            log.warning("Мета донора через API не получена (%s) — иду по гриду", e)
+
         self._open_offers()
         self._apply_grid_filter(product)
 
@@ -544,7 +747,7 @@ class KeitaroClient:
         # (фикс гонки: фиксированный таймаут не гарантировал загрузку → 0 строк
         # → ложное «оффер не найден»). Ждём ссылку на редактор оффера.
         try:
-            self.page.wait_for_selector('a[href*="/editor/offer/"]', timeout=15_000)
+            self.page.wait_for_selector(self._ROWS_READY, timeout=15_000)
         except PWTimeout:
             log.warning("Офферы продукта '%s' не появились в гриде", product)
             return {"network": None, "bracket": None, "source_name": None}
@@ -554,7 +757,7 @@ class KeitaroClient:
 
         # Один JS-проход (без поштучного inner_text — он зависал на 45с при
         # виртуализированном гриде с сотнями строк).
-        texts = [t for _href, t in self._grid_rows_data() if t]
+        texts = [r["text"] for r in self._grid_rows_data() if r.get("text")]
         if not texts:
             log.warning("Офферы продукта '%s' не найдены — нечего копировать", product)
             return {"network": None, "bracket": None, "source_name": None}
@@ -572,6 +775,36 @@ class KeitaroClient:
         name_line = self._extract_offer_name(chosen_text, "")
         return {
             "network": self._extract_network_number(chosen_text),
+            "bracket": self._bracket_vertical_geo(name_line),
+            "source_name": name_line,
+        }
+
+    def _offer_meta_via_api(self, product: str, geo_code: str) -> dict:
+        """find_offer_meta через offers.withStats (см. _offers_api).
+
+        Порядок выбора донора тот же, что и по гриду: сперва оффер с нужным
+        гео-кодом в названии, иначе последний в выдаче (она отсортирована по id
+        убыв., т.е. это самый старый — как и последняя строка грида).
+        """
+        rows = self._offers_by_name_api(product, limit=50)
+        if not rows:
+            log.warning("Офферы продукта '%s' не найдены — нечего копировать", product)
+            return {"network": None, "bracket": None, "source_name": None}
+        geo_up = (geo_code or "").upper()
+        chosen = None
+        for r in rows:
+            nm = (r.get("name") or "")
+            if geo_up and re.search(rf"\b{re.escape(geo_up)}\b", nm.upper()):
+                chosen = r
+                break
+        if chosen is None:
+            chosen = rows[-1]
+        name_line = (chosen.get("name") or "").strip()
+        net = str(chosen.get("affiliate_network") or "").strip()
+        log.info("Донор для '%s'/%s: %s (сеть %s)", product, geo_code or "-",
+                 name_line, net or "нет")
+        return {
+            "network": net or None,
             "bracket": self._bracket_vertical_geo(name_line),
             "source_name": name_line,
         }
@@ -618,13 +851,44 @@ class KeitaroClient:
 
         # Опции react-select — элементы с id*="option". Кликаем ту, чей текст
         # ТОЧНО равен group (чтобы 'VI Visiowell GT' не спутать с 'AVP VI ...').
+        # Список может грузиться АСИНХРОННО: после полной перезагрузки страницы
+        # кампании в дропдауне долго висит «Loading...» (был кейс >8с), и
+        # прежний фикс-таймаут 6с давал ложное «группа не найдена». Ждём до 30с;
+        # при «No options» переоткрываем дропдаун и вводим текст заново — ввод
+        # во время загрузки react-select мог потерять.
         opts = page.locator('[id*="option"]')
-        try:
-            opts.first.wait_for(state="visible", timeout=6_000)
-        except PWTimeout:
-            self._dump_debug("group-no-options")
-            raise KeitaroError(
-                f"Группа '{group}' не найдена в списке Keitaro — заливка прервана")
+        deadline = time.monotonic() + 30
+        reopens = 0
+        while True:
+            try:
+                if opts.count() > 0 and opts.first.is_visible():
+                    break
+            except Exception:  # noqa: BLE001 — дропдаун перерисовался
+                pass
+            if time.monotonic() > deadline:
+                self._dump_debug("group-no-options")
+                raise KeitaroError(
+                    f"Группа '{group}' не найдена в списке Keitaro — заливка прервана")
+            no_options = False
+            try:
+                no_options = page.get_by_text("No options").first.is_visible()
+            except Exception:  # noqa: BLE001
+                pass
+            if no_options and reopens < 2:
+                # Опции могли догрузиться уже ПОСЛЕ нашего ввода — повторяем.
+                reopens += 1
+                log.info("_select_group: «No options» — переоткрываю дропдаун "
+                         "(%d/2)", reopens)
+                page.keyboard.press("Escape")
+                page.wait_for_timeout(700)
+                try:
+                    page.locator('[data-test-id="groups-select"]').first.click(timeout=6_000)
+                except Exception:  # noqa: BLE001
+                    pass
+                page.keyboard.type(group)
+                page.wait_for_timeout(1500)
+            else:
+                page.wait_for_timeout(700)
         n = opts.count()
         target = group.strip().lower()
         for i in range(n):
@@ -799,7 +1063,28 @@ class KeitaroClient:
         self._select_country(country_query, country_name)
         self._shot("06-country")
 
+        # 5b) Снимок «до»: максимальный id среди офферов с таким же продуктом в
+        # названии. Созданный нами оффер обязан получить id БОЛЬШЕ — это граница
+        # свежести для детекции (у продукта бывают дубли с тем же названием,
+        # напр. после повторной заливки).
+        needle_before = name.split("[")[0].strip()
+        max_id_before = self._max_offer_id_by_name(needle_before)
+        log.info("create_offer: max id по «%s» до создания: %s",
+                 needle_before, max_id_before)
+
         # 6) Создать — финальная зелёная кнопка модалки. data-test-id="success-button".
+        # Ответы XHR сохранения слушаем — из них обычно виден id созданного оффера
+        # (это надёжнее, чем искать свежий оффер в гриде/выдаче).
+        responses: list = []
+
+        def _grab(resp) -> None:
+            try:
+                if resp.request.method == "POST" and "offer" in resp.url.lower():
+                    responses.append(resp)
+            except Exception:  # noqa: BLE001
+                pass
+
+        page.on("response", _grab)
         _step("Нажимаю «Создать»")
         page.locator('[data-test-id="success-button"]').first.click()
         page.wait_for_timeout(1000)
@@ -814,7 +1099,14 @@ class KeitaroClient:
         _step("Проверяю, что оффер создан (модалка закрылась)")
         # 300с: через прокси сохранение с большим zip идёт долго; опрос выходит
         # раньше, как только модалка закрылась.
-        if not self._wait_modal_closed("Создание оффера", total_ms=300_000):
+        try:
+            closed = self._wait_modal_closed("Создание оффера", total_ms=300_000)
+        finally:
+            try:
+                page.remove_listener("response", _grab)
+            except Exception:  # noqa: BLE001
+                pass
+        if not closed:
             errs = self._collect_modal_errors()
             self._dump_debug("create-not-submitted")
             self._shot("07-create-failed")
@@ -824,12 +1116,73 @@ class KeitaroClient:
                    "Проверь ZIP/страну/обязательные поля (см. storage/keitaro/upload-07-create-failed.png)."))
         page.wait_for_timeout(800)
 
-        # 7) Собираем КАНДИДАТОВ на id (НЕ переименовываем — это делает
-        # пользователь после подтверждения; авто-выбор опасен, см. инцидент с
-        # переименованием чужого старого оффера id=6506).
+        # 7) id созданного оффера. Сначала — из ответа сохранения (самый точный
+        # источник), с ОБЯЗАТЕЛЬНОЙ проверкой по API: у оффера с этим id название
+        # должно совпадать с отправленным и id должен быть свежим. Иначе —
+        # детекция по названию (см. find_offer_id_candidates). Переименование
+        # делает вызывающий код; авто-выбор id при неуверенности запрещён
+        # (инцидент с переименованием чужого старого оффера id=6506).
         _step("Ищу созданный оффер для подтверждения id")
         product = name.split("[")[0].strip()
-        return self.find_offer_id_candidates(name, product)
+        oid = self._created_id_from_responses(responses, name, max_id_before)
+        if oid:
+            log.info("create_offer: id созданного оффера из ответа Keitaro: %s", oid)
+            return {"best": oid, "confident": True,
+                    "candidates": [{"id": oid, "name": name, "has_id_prefix": False}]}
+        return self.find_offer_id_candidates(name, product, min_id=max_id_before)
+
+    def _created_id_from_responses(self, responses: list, name: str,
+                                   min_id: Optional[int]) -> Optional[int]:
+        """Достаёт id созданного оффера из перехваченных XHR-ответов сохранения.
+
+        Возвращает id ТОЛЬКО подтверждённый: оффер с таким id существует, его
+        название РОВНО то, что мы отправили (значит, он ещё не переименован и
+        точно наш), и id больше снимка `min_id`. Иначе None — уйдём в детекцию
+        по названию. Так исключено переименование чужого оффера.
+        """
+        found: list[int] = []
+        for resp in responses:
+            try:
+                data = resp.json()
+            except Exception:  # noqa: BLE001
+                continue
+            ids = [i for i in self._iter_ids(data) if i not in found]
+            found.extend(ids)
+            if ids:
+                log.info("create_offer: ответ %s → id-кандидаты %s", resp.url, ids)
+        fresh = [i for i in found if min_id is None or i > min_id]
+        if not fresh:
+            return None
+        target = self._norm_name(name)
+        try:
+            names = self._names_by_ids_api([str(i) for i in fresh])
+        except Exception as e:  # noqa: BLE001
+            log.warning("Проверка id из ответа не удалась: %s", e)
+            return None
+        ok = [i for i in fresh if self._norm_name(names.get(str(i), "")) == target]
+        if len(ok) == 1:
+            return ok[0]
+        if len(ok) > 1:
+            log.warning("В ответе несколько подходящих id %s — беру максимальный", ok)
+            return max(ok)
+        return None
+
+    @staticmethod
+    def _iter_ids(data, depth: int = 0):
+        """Рекурсивно собирает числовые значения ключа 'id' из JSON-ответа."""
+        if depth > 4:
+            return
+        if isinstance(data, dict):
+            v = data.get("id")
+            if isinstance(v, int) or (isinstance(v, str) and v.isdigit()):
+                yield int(v)
+            for val in data.values():
+                if isinstance(val, (dict, list)):
+                    yield from KeitaroClient._iter_ids(val, depth + 1)
+        elif isinstance(data, list):
+            for val in data[:20]:
+                if isinstance(val, (dict, list)):
+                    yield from KeitaroClient._iter_ids(val, depth + 1)
 
     def _wait_modal_closed(self, title: str, *, total_ms: int = 60_000,
                            poll_ms: int = 2_500) -> bool:
@@ -875,7 +1228,12 @@ class KeitaroClient:
                 continue
         return " | ".join(msgs[:5])
 
-    def find_offer_id_candidates(self, name: str, product: str = "") -> dict:
+    @staticmethod
+    def _norm_name(s: str) -> str:
+        return " ".join((s or "").split()).strip().lower()
+
+    def find_offer_id_candidates(self, name: str, product: str = "",
+                                 min_id: Optional[int] = None) -> dict:
         """Кандидаты на id только что созданного оффера (только GET-чтение).
 
         Возвращает {best, confident, candidates:[{id,name,has_id_prefix}]}:
@@ -883,15 +1241,59 @@ class KeitaroClient:
           - иначе confident=False, best=None — пусть пользователь выберет id вручную.
         НИКОГДА не выбирает оффер сам при неуверенности (защита от переименования
         чужого оффера). Кандидаты отсортированы по id убыв. (свежие сверху).
+
+        min_id — снимок максимального id ДО создания: кандидат на «наш свежий»
+        обязан быть больше (иначе уверенности нет, это старый дубль).
+
+        Основной путь — внутренний JSON-API грида (один POST, без DOM): грид
+        после закрытия модалки перерисовывается, поле фильтра пересоздаётся,
+        строки виртуализированы — чтение через DOM было главным источником
+        зависаний и ложного «id не определён».
         """
         self.login()
-        self._open_offers()
         needle = (product or name.split("[")[0]).strip()
+        target = self._norm_name(name)
+
+        try:
+            return self._candidates_via_api(needle, target, min_id)
+        except Exception as e:  # noqa: BLE001
+            log.warning("Детекция id через API не сработала (%s) — иду по гриду", e)
+        return self._candidates_via_grid(needle, target, min_id)
+
+    def _candidates_via_api(self, needle: str, target: str,
+                            min_id: Optional[int]) -> dict:
+        """Кандидаты через offers.withStats (name CONTAINS needle, сорт по id)."""
+        candidates: list[dict] = []
+        exact: list[int] = []
+        for attempt in range(4):  # свежий оффер появляется в выдаче не мгновенно
+            rows = self._offers_by_name_api(needle, limit=50)
+            candidates, exact = [], []
+            for r in rows:
+                if not str(r.get("id") or "").isdigit():
+                    continue
+                oid = int(r["id"])
+                nm = (r.get("name") or "").strip()
+                has_prefix = bool(re.match(r"^\s*\d{2,7}\b", nm))
+                candidates.append({"id": oid, "name": nm,
+                                   "has_id_prefix": has_prefix})
+                if (not has_prefix and self._norm_name(nm) == target
+                        and (min_id is None or oid > min_id)):
+                    exact.append(oid)
+            if exact:
+                break
+            if attempt < 3:
+                self.page.wait_for_timeout(2_500)
+        candidates.sort(key=lambda c: c["id"], reverse=True)
+        return {"best": max(exact) if exact else None,
+                "confident": bool(exact), "candidates": candidates}
+
+    def _candidates_via_grid(self, needle: str, target: str,
+                             min_id: Optional[int]) -> dict:
+        """Старый путь через DOM-грид — фолбэк, если API недоступен."""
+        self._open_offers()
 
         def _norm(s: str) -> str:
-            return " ".join((s or "").split()).strip().lower()
-
-        target = _norm(name)
+            return self._norm_name(s)
 
         # Грид может не сразу проиндексировать только что созданный оффер (заливка
         # ZIP). Поэтому делаем несколько проходов: фильтр → чтение строк; если
@@ -901,7 +1303,7 @@ class KeitaroClient:
         for attempt in range(3):
             self._apply_grid_filter(needle)
             try:
-                self.page.wait_for_selector('a[href*="/editor/offer/"]', timeout=15_000)
+                self.page.wait_for_selector(self._ROWS_READY, timeout=15_000)
             except PWTimeout:
                 if attempt < 2:
                     self.page.wait_for_timeout(2_500)
@@ -911,16 +1313,17 @@ class KeitaroClient:
 
             candidates = []
             exact = []
-            for href, text in self._grid_rows_data():
-                m = re.search(r"/editor/offer/(\d+)", href or "")
-                if not m:
+            for r in self._grid_rows_data():
+                if not str(r.get("id") or "").isdigit():
                     continue
-                oid = int(m.group(1))
-                name_line = self._extract_offer_name(text or "", oid)
+                oid = int(r["id"])
+                name_line = (r.get("name") or "").strip() \
+                    or self._extract_offer_name(r.get("text") or "", oid)
                 has_prefix = bool(re.match(r"^\s*\d{2,7}\b", name_line))
                 candidates.append({"id": oid, "name": name_line.strip(),
                                    "has_id_prefix": has_prefix})
-                if not has_prefix and _norm(name_line) == target:
+                if (not has_prefix and _norm(name_line) == target
+                        and (min_id is None or oid > min_id)):
                     exact.append(oid)
             # Нашли точное совпадение — оффер уже в гриде, выходим.
             if exact:
@@ -933,8 +1336,12 @@ class KeitaroClient:
         best = max(exact) if exact else None
         return {"best": best, "confident": bool(exact), "candidates": candidates}
 
-    def _grid_rows_data(self) -> list[tuple[str, str]]:
-        """Снимает все строки грида ОДНИМ JS-проходом → [(href_оффера, текст_строки)].
+    def _grid_rows_data(self) -> list[dict]:
+        """Снимает все строки грида ОДНИМ JS-проходом → [{id, name, text}].
+
+        id — из ячейки `grid-cell-id` (в старой разметке — из ссылки на
+        редактор), name — из `title` ячейки названия, text — весь текст строки
+        (нужен для разбора номера партнёрской сети).
 
         Поштучный обход `rows.nth(i).inner_text()` зависал на 45с (грид
         виртуализирован — дальние строки не материализованы). evaluate_all берёт
@@ -942,8 +1349,18 @@ class KeitaroClient:
         try:
             return self.page.locator("tr.grid-tbody-row").evaluate_all(
                 """rows => rows.map(r => {
+                    const idCell = r.querySelector('td.grid-cell-id');
+                    const nameCell = r.querySelector('td.grid-cell-name');
                     const a = r.querySelector('a[href*="/editor/offer/"]');
-                    return [a ? a.getAttribute('href') : '', r.innerText || ''];
+                    let id = idCell ? (idCell.innerText || '').trim() : '';
+                    if (!id && a) {
+                        const m = (a.getAttribute('href') || '').match(/\\/editor\\/offer\\/(\\d+)/);
+                        id = m ? m[1] : '';
+                    }
+                    const name = nameCell
+                        ? (nameCell.getAttribute('title') || nameCell.innerText || '').trim()
+                        : '';
+                    return {id: id, name: name, text: r.innerText || ''};
                 })"""
             )
         except Exception:  # noqa: BLE001
@@ -990,7 +1407,7 @@ class KeitaroClient:
         self._open_offers()
         self._apply_grid_filter(query)
         try:
-            self.page.wait_for_selector('a[href*="/editor/offer/"]', timeout=15_000)
+            self.page.wait_for_selector(self._ROWS_READY, timeout=15_000)
         except PWTimeout:
             return []
         self.page.wait_for_timeout(self._GRID_SETTLE_MS)
@@ -1003,13 +1420,13 @@ class KeitaroClient:
             stale_rounds = 0
             for _ in range(80):  # предохранитель от бесконечного скролла
                 added = 0
-                for href, text in self._grid_rows_data():
-                    m = re.search(r"/editor/offer/(\d+)", href or "")
-                    if not m:
+                for r in self._grid_rows_data():
+                    if not str(r.get("id") or "").isdigit():
                         continue
-                    oid = int(m.group(1))
+                    oid = int(r["id"])
                     if oid not in seen:
-                        seen[oid] = self._extract_offer_name(text or "", oid).strip()
+                        seen[oid] = ((r.get("name") or "").strip()
+                                     or self._extract_offer_name(r.get("text") or "", oid).strip())
                         added += 1
                 if added == 0:
                     stale_rounds += 1
@@ -1041,7 +1458,8 @@ class KeitaroClient:
         return [{"id": oid, "name": name} for oid, name in seen.items()]
 
     def rename_offer(self, offer_id: int | str, new_name: str, *,
-                     country_query: str = "", country_name: str = "") -> None:
+                     country_query: str = "", country_name: str = "",
+                     current_name: str = "") -> None:
         """Переименовывает оффер (дописывает id в название).
 
         Механика (по UI Keitaro): клик по НАЗВАНИЮ оффера в гриде открывает
@@ -1050,48 +1468,32 @@ class KeitaroClient:
 
         country_query/country_name — для переподтверждения страны (модалка при
         быстром сохранении сбрасывала её в «Неизвестно»).
+        current_name — ТЕКУЩЕЕ название оффера, если оно известно (свежесозданный
+        оффер ещё БЕЗ id в названии, а поиск грида ищет только по названию —
+        фильтровать по id бессмысленно, это лишние 15с ожидания и лишний риск).
         """
         self.login()
         self._open_offers()
         page = self.page
-        filt = page.locator(self._GRID_FILTER).first
-        filt.wait_for(state="visible", timeout=10_000)
-        filt.fill("")
-        filt.fill(str(offer_id))
+        self._apply_grid_filter(current_name.strip() or str(offer_id))
         try:
-            page.wait_for_selector(f'a[href$="/editor/offer/{offer_id}"]', timeout=15_000)
+            row = self._wait_offer_row(offer_id)
         except PWTimeout:
             # Свежесозданный оффер ещё БЕЗ id в названии, а поиск грида ищет
             # только по названию — берём точное название по id через API.
             try:
                 self._filter_grid_by_api_name(offer_id)
-                page.wait_for_selector(
-                    f'a[href$="/editor/offer/{offer_id}"]', timeout=15_000)
+                row = self._wait_offer_row(offer_id)
             except Exception:  # noqa: BLE001
                 self._dump_debug("rename-offer-notfound")
                 raise KeitaroError(f"Оффер {offer_id} не найден для переименования")
         page.wait_for_timeout(500)
 
-        row = page.locator(
-            f'tr.grid-tbody-row:has(a[href$="/editor/offer/{offer_id}"])').first
         # Модалку редактирования открывает клик по ЯЧЕЙКЕ НАЗВАНИЯ (td), а НЕ по
-        # иконке «Редактировать» (она не реагирует) и не по ссылке (название — не <a>).
-        # Ячейка названия — td со скобкой '[' (напр. '[VISION-GT]').
-        tds = row.locator("td")
-        name_td = None
-        best = -1
-        for i in range(tds.count()):
-            txt = (tds.nth(i).inner_text() or "").strip()
-            if "[" in txt and len(txt) > best:
-                best = len(txt)
-                name_td = tds.nth(i)
-        if name_td is None:
-            self._dump_debug("rename-no-name-td")
-            raise KeitaroError(f"Не нашёл ячейку-название оффера {offer_id}")
-        name_td.click()
+        # иконке «Редактировать» (её больше нет) и не по ссылке (название — не <a>).
+        self._open_offer_modal(row, offer_id)
 
         try:
-            page.wait_for_selector('text=Редактирование оффера', timeout=10_000)
             inp = page.get_by_label("Название", exact=False).first
             inp.wait_for(state="visible", timeout=6_000)
 
@@ -1129,7 +1531,148 @@ class KeitaroClient:
             self._dump_debug("rename-offer")
             raise KeitaroError(f"Не удалось переименовать оффер {offer_id}: {e}")
 
+    def update_offer_archive(self, offer_id: int | str, zip_path: str | Path,
+                             *, current_name: str = "",
+                             on_progress: Optional[Callable[[str], None]] = None) -> None:
+        """Заменяет ZIP-архив ленда у УЖЕ существующего оффера.
+
+        Для правок после заливки: открываем модалку «Редактирование оффера»
+        (клик по ячейке названия), включаем вкладку «Локальный», грузим новый
+        архив тем же input[type=file], что и при создании, и жмём «Сохранить».
+        Название/группа/страна не трогаются.
+        """
+        zip_path = Path(zip_path)
+        if not zip_path.exists():
+            raise KeitaroError(f"ZIP не найден: {zip_path}")
+
+        def _step(msg: str) -> None:
+            log.info("update_offer_archive[%s]: %s", offer_id, msg)
+            if on_progress:
+                try:
+                    on_progress(msg)
+                except Exception:  # noqa: BLE001
+                    pass
+
+        self.login()
+        self._open_offers()
+        page = self.page
+        _step("ищу оффер в гриде")
+        self._apply_grid_filter(current_name.strip() or str(offer_id))
+        try:
+            row = self._wait_offer_row(offer_id)
+        except PWTimeout:
+            self._filter_grid_by_api_name(offer_id)
+            row = self._wait_offer_row(offer_id)
+        _step("открываю модалку редактирования")
+        self._open_offer_modal(row, offer_id)
+
+        try:
+            # Дождаться асинхронной загрузки формы (поле «Название» заполнится).
+            inp = page.get_by_label("Название", exact=False).first
+            inp.wait_for(state="visible", timeout=6_000)
+            for _ in range(50):
+                if (inp.input_value() or "").strip():
+                    break
+                page.wait_for_timeout(200)
+            page.wait_for_timeout(500)
+
+            # Вкладка «Локальный» → input[type=file] (как в create_offer).
+            _step("загружаю новый архив")
+            try:
+                page.locator('[data-test-id="local-button-group-item"]').first \
+                    .dispatch_event("click")
+                page.wait_for_timeout(600)
+            except Exception:  # noqa: BLE001
+                pass  # у локального оффера вкладка уже активна
+            finput = page.locator('.modal-content input[type="file"]').first
+            finput.wait_for(state="attached", timeout=8_000)
+            finput.set_input_files(str(zip_path))
+            # Ждём конца XHR-загрузки архива (см. create_offer).
+            try:
+                page.wait_for_function(
+                    """() => {
+                        const uploading = /загрузк|upload|%/i.test(
+                            (document.querySelector('.progress, [class*=progress]')||{}).textContent||'');
+                        return !uploading;
+                    }""",
+                    timeout=240_000,
+                )
+            except Exception:  # noqa: BLE001
+                page.wait_for_timeout(4000)
+            self._shot("update-archive-uploaded")
+
+            _step("сохраняю оффер")
+            page.locator('.modal-content [data-test-id="success-button"]').first \
+                .click(timeout=10_000)
+            if not self._wait_modal_closed("Редактирование оффера",
+                                           total_ms=120_000):
+                errs = self._collect_modal_errors()
+                self._dump_debug("update-archive-stuck")
+                raise KeitaroError(
+                    "Модалка редактирования не закрылась после «Сохранить»"
+                    + (f": {errs}" if errs else ""))
+            _step("готово — архив оффера обновлён")
+        except KeitaroError:
+            raise
+        except Exception as e:  # noqa: BLE001
+            self._dump_debug("update-archive")
+            self._close_offer_modal()
+            raise KeitaroError(
+                f"Не удалось обновить архив оффера {offer_id}: {e}")
+
     # ── тестовая кампания для залитого ленда ─────────────────────
+    def _campaigns_view_active(self) -> bool:
+        """SPA реально показывает раздел «Кампании» (а не просто хэш в URL).
+
+        Активный раздел помечается классом на ссылке меню: `a.nav-link.active`.
+        Смена хэша из другого раздела иногда НЕ перерисовывает вью — URL уже
+        #!/campaigns, а на экране всё ещё офферы с их кнопкой «Создать».
+        """
+        try:
+            txt = self.page.locator("a.nav-link.active").first.inner_text(timeout=3_000)
+            return "Кампании" in (txt or "")
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _open_campaigns(self):
+        """Открывает грид кампаний и возвращает локатор кнопки «Создать».
+
+        Переход с #!/offers на #!/campaigns — это смена ХЭША: браузер страницу
+        не перезагружает, роутинг делает SPA, и он иногда подвисает на пустой
+        странице ИЛИ вовсе не перерисовывает вью (оставался грид ОФФЕРОВ со
+        своей кнопкой «Создать» — кампания «создавалась» в модалке оффера и
+        падала на группе Andrei AM, см. debug-group-no-options). Поэтому:
+        переход из другого раздела → смена хэша + ПОЛНАЯ перезагрузка, и перед
+        возвратом кнопки проверяем активный пункт меню «Кампании». До 3 раз.
+        """
+        page = self.page
+        url = f"{self.base_url}/#!/campaigns/"
+        for attempt in range(3):
+            try:
+                if "#!/campaigns" not in (page.url or ""):
+                    self._goto(url)
+                    # Хэш сменился, но SPA могла не перерисовать вью —
+                    # перезагрузка гарантированно грузит роут кампаний.
+                    if not self._campaigns_view_active():
+                        page.reload(wait_until="domcontentloaded")
+                elif attempt:
+                    page.reload(wait_until="domcontentloaded")
+                btn = page.locator('[data-test-id="create-button"]').first
+                btn.wait_for(state="visible", timeout=15_000)
+                if not self._campaigns_view_active():
+                    raise KeitaroError(
+                        "SPA показывает не «Кампании» (кнопка «Создать» — чужая)")
+                return btn
+            except Exception as e:  # noqa: BLE001
+                log.warning("Грид кампаний не открылся (%d/3): %s", attempt + 1, e)
+                try:  # SPA завис на пустой странице — перезагружаем целиком
+                    page.reload(wait_until="domcontentloaded")
+                    page.wait_for_timeout(1500 * (attempt + 1))
+                except Exception:  # noqa: BLE001
+                    pass
+        self._dump_debug("campaigns-grid-not-loaded")
+        raise KeitaroError("Не удалось открыть грид кампаний (#!/campaigns/)")
+
     def create_test_campaign(self, offer_id: int | str, offer_full_name: str, *,
                              group: str = "Andrei AM",
                              name_prefix: str = "test mch",
@@ -1166,9 +1709,7 @@ class KeitaroClient:
         try:
             # 1) Грид кампаний → «Создать»
             _step("открываю кампании")
-            self._goto(f"{self.base_url}/#!/campaigns/")
-            create_btn = page.locator('[data-test-id="create-button"]').first
-            create_btn.wait_for(state="visible", timeout=20_000)
+            create_btn = self._open_campaigns()
             create_btn.click()
 
             # 2) Страница создания: фокус уже в поле названия — печатаем имя.
@@ -1197,32 +1738,46 @@ class KeitaroClient:
             _step(f"выбираю группу: {group}")
             self._select_group(group)
 
-            # 4) «Создать поток» → модалка
-            _step("создаю поток")
-            page.locator('button:has-text("Создать поток")').first.click(timeout=10_000)
-            page.wait_for_selector('.modal-content', timeout=15_000)
+            # 4-6) «Создать поток» → вкладка «Схема» → готовая «Добавить офферы».
+            # Кнопка приходит disabled, пока Keitaro инициализирует селектор
+            # сущностей, и иногда так и не оживает — тогда пересоздаём модалку
+            # потока (обычно со второго раза грузится), и только потом сдаёмся.
+            add_btn = None
+            for attempt in range(2):
+                _step("создаю поток" if not attempt else "пересоздаю поток (селектор офферов не ожил)")
+                if attempt:  # закрыть подвисшую модалку потока
+                    try:
+                        page.locator('.modal-content button:has-text("Отмена")').first.click(timeout=5_000)
+                        page.wait_for_timeout(1_000)
+                    except Exception:  # noqa: BLE001
+                        page.keyboard.press("Escape")
+                        page.wait_for_timeout(800)
+                page.locator('button:has-text("Создать поток")').first.click(timeout=10_000)
+                page.wait_for_selector('.modal-content', timeout=15_000)
 
-            # 5) Вкладка «Схема»
-            _step("вкладка «Схема»")
-            page.locator('.modal-content a.nav-link:has-text("Схема")').first.click(timeout=10_000)
+                _step("вкладка «Схема»")
+                page.locator('.modal-content a.nav-link:has-text("Схема")').first.click(timeout=10_000)
 
-            # 6) «Добавить офферы» — кнопка может долго грузиться (disabled,
-            # пока entity selector не инициализирован). Ждём готовности циклом,
-            # чтобы отличать «ещё грузится» от «ошибка».
-            _step("жду готовности кнопки «Добавить офферы»")
-            add_btn = page.locator('[data-test-id="add-offer-button"]').first
-            add_btn.wait_for(state="visible", timeout=20_000)
-            waited = 0
-            while add_btn.is_disabled():
-                page.wait_for_timeout(1_500)
-                waited += 1500
-                if waited % 9_000 == 0:
-                    _step(f"кнопка «Добавить офферы» ещё грузится ({waited // 1000}с)…")
-                if waited >= 60_000:
-                    self._dump_debug("campaign-add-offer-stuck")
-                    raise KeitaroError(
-                        "Кнопка «Добавить офферы» не стала доступной за 60с — "
-                        "похоже на ошибку загрузки (см. debug-скриншот)")
+                _step("жду готовности кнопки «Добавить офферы»")
+                btn = page.locator('[data-test-id="add-offer-button"]').first
+                btn.wait_for(state="visible", timeout=20_000)
+                waited = 0
+                while btn.is_disabled():
+                    page.wait_for_timeout(1_500)
+                    waited += 1500
+                    if waited % 9_000 == 0:
+                        _step(f"кнопка «Добавить офферы» ещё грузится ({waited // 1000}с)…")
+                    if waited >= 40_000:
+                        break
+                if not btn.is_disabled():
+                    add_btn = btn
+                    break
+            if add_btn is None:
+                self._dump_debug("campaign-add-offer-stuck")
+                raise KeitaroError(
+                    "Кнопка «Добавить офферы» не стала доступной даже после "
+                    "пересоздания потока — похоже на ошибку загрузки Keitaro "
+                    "(см. debug-скриншот)")
             add_btn.click()
 
             # 7) Модалка «Офферы»: поиск по id → чекбокс строки → «Добавить»

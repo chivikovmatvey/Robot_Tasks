@@ -296,7 +296,9 @@ def run_scan_only(zip_path: str) -> dict:
 
     # widget цены из data-атрибутов
     widget_prices = {}
+    import html as _html
     for attr, val in re.findall(r'data-(new|old)-price="([^"]+)"', text):
+        val = _html.unescape(val)  # "29&euro;" → "29€"
         if attr == 'new':
             widget_prices['widget_price_new'] = val.strip()
         else:
@@ -348,9 +350,20 @@ def run_adapt(zip_path: str, params: dict,
     from datetime import datetime
 
     def _process():
-        from scripts.scanner import section, ok
+        from scripts.scanner import section, ok, warn, strip_product_modifiers
 
         with workdir(STORAGE):
+            # Модификаторы (Low / Resell / High Price / adult) — пометки закупки,
+            # а не бренд: на ленде их нет, поиск по «Vizoptic Low» ничего не
+            # находит, а в новом названии они не нужны. Чистим ЗДЕСЬ — это общая
+            # точка входа адаптации (сессии, чат-агент, страница Scan&Adapt).
+            for _key in ('product_old', 'product_new'):
+                _raw = (params.get(_key) or '').strip()
+                _core = strip_product_modifiers(_raw)
+                if _core and _core != _raw:
+                    params[_key] = _core
+                    warn(f"{_key}: убран модификатор — «{_raw}» → «{_core}»")
+
             geos = scanner.load_geos()
             geo_id = params['geo_id']
             if geo_id not in geos:
@@ -407,7 +420,9 @@ def run_adapt(zip_path: str, params: dict,
             product_candidates = scanner.detect_product_candidates(text)
 
             widget_prices = {}
+            import html as _html
             for attr, val in re.findall(r'data-(new|old)-price="([^"]+)"', text):
+                val = _html.unescape(val)  # "29&euro;" → "29€"
                 if attr == 'new':
                     widget_prices['widget_price_new'] = val.strip()
                 else:
@@ -505,6 +520,28 @@ def run_adapt(zip_path: str, params: dict,
                             zf.write(fp, fp.relative_to(dst_root))
 
                 ok(f"Result: {out_path.name}")
+
+                # Финальная сверка обвязки с регламентом (§5/§6). Появилась
+                # после кейса luminaeterna: адаптация «успешна», а обвязка
+                # нерабочая (id="order_form", чужие hidden, нет offerId).
+                section("ПРОВЕРКА ОБВЯЗКИ (чеклист §5/§6)")
+                try:
+                    from scripts import verify_wrap
+                    problems = verify_wrap.verify_zip(out_path)
+                    errors = [p for p in problems if p["level"] == "error"]
+                    for p in problems:
+                        (print if p["level"] == "error" else warn)(
+                            ("\x1b[91m✗ ОБВЯЗКА: " + p["msg"] + "\x1b[0m")
+                            if p["level"] == "error" else "ОБВЯЗКА: " + p["msg"])
+                    if not problems:
+                        ok("Обвязка соответствует регламенту")
+                    elif errors:
+                        print(f"\x1b[91mОбвязка НЕ по регламенту: "
+                              f"{len(errors)} ошибок — проверь ленд перед "
+                              f"заливкой!\x1b[0m")
+                except Exception as e:  # noqa: BLE001
+                    warn(f"Проверка обвязки не выполнена: {e}")
+
                 # Промежуточные архивы (clean/inject) больше не нужны.
                 for tmp in tmp_files:
                     try:

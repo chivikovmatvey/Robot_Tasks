@@ -33,6 +33,22 @@ USER_AGENT = (
 )
 
 
+# «31 Jul 18:16» (первая строка ячейки Task) → «18:16 31.07».
+_MONTHS_EN = {m: i for i, m in enumerate(
+    ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+     "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"], start=1)}
+
+
+def _fmt_created(td0_text: str) -> str:
+    m = re.search(r"\b(\d{1,2})\s+([A-Za-z]{3})\.?\s+(\d{1,2}:\d{2})\b", td0_text or "")
+    if not m:
+        return ""
+    day, mon, hhmm = m.group(1), _MONTHS_EN.get(m.group(2).capitalize()), m.group(3)
+    if not mon:
+        return ""
+    return f"{hhmm} {int(day):02d}.{mon:02d}"
+
+
 @dataclass
 class TaskSummary:
     """Краткая строка из списка задач."""
@@ -46,6 +62,7 @@ class TaskSummary:
     offer: str = ""
     category: str = ""
     deadline: str = ""
+    created: str = ""        # время постановки в формате «18:16 31.07»
 
 
 @dataclass
@@ -250,10 +267,12 @@ class AdRobotClient:
             ts = TaskSummary(uid=uid, url=self._url(href))
             ts.title = link.get_text(" ", strip=True)
             if tds:
-                # колонка Task: дата + Deadline
-                dl = re.search(r"Deadline:\s*([^<\n]+)", tds[0].get_text("\n", strip=True))
+                td0 = tds[0].get_text("\n", strip=True)
+                # колонка Task: дата постановки («31 Jul 18:16») + Deadline
+                dl = re.search(r"Deadline:\s*([^<\n]+)", td0)
                 if dl:
                     ts.deadline = dl.group(1).strip()
+                ts.created = _fmt_created(td0)
             # колонки: Task, Created by, Assigned to, Status, Offer, Category, ...
             def col(i):
                 return tds[i].get_text(" ", strip=True) if i < len(tds) else ""
@@ -366,24 +385,49 @@ class AdRobotClient:
 
     # ---------- offer product images ----------
 
-    OFFER_GROUPS_PATH = "/kt/offer_groups/extended/"
+    OFFER_GROUPS_API_PATH = "/kt/api/offer_groups/"
 
     def get_offer_product_images(self, offer_name: str) -> list[str]:
-        """URL фото продукта со страницы оффера (по точному названию оффера).
+        """URL фото продукта группы офферов (по названию оффера).
 
-        Парсит /kt/offer_groups/extended/?search_term=<offer> → блоки
-        `.product_icon_wrapper a[href]` (изображение продукта на robotmediaassets).
+        Раньше страница /kt/offer_groups/ отдавала готовый HTML. Теперь это
+        Angular-SPA (в теле только <app-root>), а данные грузятся из JSON-API
+        /kt/api/offer_groups/?q=<term> — каждая группа несёт поле `image_url`
+        (то самое, что рендерится в блок `<a class="ktogd__img-link">`).
+
+        Возвращаем `image_url` групп: сначала с точным совпадением имени
+        (без учёта регистра), иначе — всех найденных. Дедуп, порядок сохранён.
         """
-        if not offer_name or not offer_name.strip():
+        name = (offer_name or "").strip()
+        if not name:
             return []
-        path = self.OFFER_GROUPS_PATH + "?search_term=" + quote(offer_name.strip())
+        path = self.OFFER_GROUPS_API_PATH + "?q=" + quote(name)
         resp = self._get(path)
-        soup = BeautifulSoup(resp.text, "html.parser")
+        try:
+            data = resp.json()
+        except ValueError:
+            return []
+        # DRF-пагинация {count,next,previous,results:[...]} либо голый список.
+        results = data.get("results") if isinstance(data, dict) else data
+        if not isinstance(results, list):
+            return []
+
+        exact: list[str] = []
+        other: list[str] = []
+        for g in results:
+            if not isinstance(g, dict):
+                continue
+            url = (g.get("image_url") or "").strip()
+            if not url:
+                continue
+            if (g.get("name") or "").strip().lower() == name.lower():
+                exact.append(url)
+            else:
+                other.append(url)
+
         urls: list[str] = []
-        for wrap in soup.select(".product_icon_wrapper"):
-            a = wrap.find("a", href=True) or wrap.find("img", src=True)
-            url = (a.get("href") or a.get("src")) if a else ""
-            if url and url not in urls:
+        for url in (exact or other):
+            if url not in urls:
                 urls.append(url)
         return urls
 

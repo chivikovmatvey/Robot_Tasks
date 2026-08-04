@@ -4,8 +4,10 @@ API-роуты для обработки офферов.
 Возвращает JSON с download URL и логом обработки.
 """
 import json
+import logging
 import mimetypes
 import re
+import time
 import zipfile
 from pathlib import Path
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Query
@@ -498,14 +500,9 @@ def _entry_path(path: str, names: set[str]) -> str | None:
     return None
 
 
-@router.get("/preview/{filename}/file")
-def preview_get_file(filename: str, path: str = Query(...), raw: int = Query(0)):
-    """
-    Читает содержимое файла из zip.
-    raw=1 — отдать как есть (для панели кода).
-    raw=0 — отдать с правильным MIME (для ресурсов превью в iframe);
-            для CSS дополнительно переписывает url(...) на этот же эндпоинт.
-    """
+def _serve_preview_file(filename: str, path: str, raw: int = 0) -> Response:
+    """Отдаёт файл из zip превью с правильным MIME (общая логика для
+    /preview/{f}/file и catch-all /preview/{f}/{path})."""
     import posixpath
     import urllib.parse
     import re as _re
@@ -559,6 +556,17 @@ def preview_get_file(filename: str, path: str = Query(...), raw: int = Query(0))
     return Response(content=data, media_type='application/octet-stream')
 
 
+@router.get("/preview/{filename}/file")
+def preview_get_file(filename: str, path: str = Query(...), raw: int = Query(0)):
+    """
+    Читает содержимое файла из zip.
+    raw=1 — отдать как есть (для панели кода).
+    raw=0 — отдать с правильным MIME (для ресурсов превью в iframe);
+            для CSS дополнительно переписывает url(...) на этот же эндпоинт.
+    """
+    return _serve_preview_file(filename, path, raw)
+
+
 class PreviewSaveBody(BaseModel):
     path: str
     content: str
@@ -583,6 +591,7 @@ def preview_save_file(filename: str, body: PreviewSaveBody):
     fd, tmp_path = tempfile.mkstemp(suffix='.zip', dir=str(target.parent))
     os.close(fd)
     old_bytes: bytes | None = None
+    _t0 = time.monotonic()
     try:
         replaced = False
         with zipfile.ZipFile(target, 'r') as zin, \
@@ -604,6 +613,7 @@ def preview_save_file(filename: str, body: PreviewSaveBody):
         Path(tmp_path).unlink(missing_ok=True)
         raise HTTPException(500, f"Save failed: {e}")
 
+    _t_zip = time.monotonic() - _t0
     # Правка output-архива ленда → в журнал пост-правок (переживёт переадаптацию).
     try:
         from services.session import get_manager
@@ -616,7 +626,83 @@ def preview_save_file(filename: str, body: PreviewSaveBody):
     except Exception:  # noqa: BLE001 — журнал не должен ломать сохранение
         logging.getLogger("api").exception("Журнал правок: сбой записи")
 
+    # Сохранение = ПОЛНАЯ пересборка архива. Если тормозит — видно, что именно:
+    # пересборка zip (диск/размер) или журнал правок (difflib).
+    _total = time.monotonic() - _t0
+    if _total > 5:
+        logging.getLogger("slow").warning(
+            "preview_save_file %s: всего %.1fс (пересборка zip %.1fс, журнал %.1fс, "
+            "архив %.1fМБ)", target.name, _total, _t_zip, _total - _t_zip,
+            target.stat().st_size / 1e6)
+
     return {"success": True, "path": body.path, "size": len(new_bytes)}
+
+
+class PreviewRenameBody(BaseModel):
+    path: str
+    new_name: str          # новое ИМЯ файла (basename), папка остаётся той же
+
+
+@router.post("/preview/{filename}/file/rename")
+def preview_rename_file(filename: str, body: PreviewRenameBody):
+    """Переименовывает файл внутри zip и обновляет ссылки на него в текстовых
+    файлах (html/php/css/js): «старое_имя» → «новое_имя» по границе слова.
+    Папка файла не меняется."""
+    import os
+    import tempfile
+    if '/' in filename or '\\' in filename or '..' in filename:
+        raise HTTPException(400, "Invalid filename")
+    if not _scan_preview_validate_inner_path(body.path):
+        raise HTTPException(400, "Invalid path")
+    new_name = (body.new_name or "").strip()
+    if (not new_name or '/' in new_name or '\\' in new_name
+            or new_name.startswith('.') or '..' in new_name):
+        raise HTTPException(400, "Некорректное новое имя файла")
+    old_name = Path(body.path).name
+    if new_name == old_name:
+        return {"success": True, "path": body.path, "renamed": 0}
+    parent = str(Path(body.path).parent)
+    new_path = new_name if parent in ('.', '') else f"{parent}/{new_name}"
+
+    target = _resolve_preview_target(filename)
+    # Ссылки правим по границе имени: «logo.png» не заденет «old-logo.png».
+    ref_re = re.compile(r'(?<![\w./-])' + re.escape(old_name) + r'(?![\w-])')
+    text_ext = {'.php', '.html', '.htm', '.css', '.js', '.json', '.blink', '.xml', '.txt'}
+
+    fd, tmp_path = tempfile.mkstemp(suffix='.zip', dir=str(target.parent))
+    os.close(fd)
+    refs_updated = 0
+    try:
+        with zipfile.ZipFile(target, 'r') as zin, \
+             zipfile.ZipFile(tmp_path, 'w', zipfile.ZIP_DEFLATED) as zout:
+            names = zin.namelist()
+            if body.path not in names:
+                raise HTTPException(404, f"File not found in zip: {body.path}")
+            if new_path in names:
+                raise HTTPException(409, f"Файл уже существует: {new_path}")
+            for item in zin.infolist():
+                data = zin.read(item.filename)
+                out_name = new_path if item.filename == body.path else item.filename
+                if (item.filename != body.path
+                        and Path(item.filename).suffix.lower() in text_ext):
+                    try:
+                        text = data.decode('utf-8')
+                        text2, n = ref_re.subn(new_name, text)
+                        if n:
+                            data = text2.encode('utf-8')
+                            refs_updated += n
+                    except UnicodeDecodeError:
+                        pass
+                zout.writestr(out_name, data)
+        os.replace(tmp_path, target)
+    except HTTPException:
+        Path(tmp_path).unlink(missing_ok=True)
+        raise
+    except Exception as e:
+        Path(tmp_path).unlink(missing_ok=True)
+        raise HTTPException(500, f"Rename failed: {e}")
+    return {"success": True, "path": new_path, "old_path": body.path,
+            "refs_updated": refs_updated}
 
 
 _SRC_TAG_OPEN = re.compile(r'<([a-zA-Z][a-zA-Z0-9-]*)')
@@ -821,6 +907,20 @@ def preview_render_file(filename: str, path: str = Query("index.php"), edit: int
                    html, flags=_re.DOTALL)
 
     return HTMLResponse(content=html)
+
+
+@router.get("/preview/{filename}/{path:path}")
+def preview_asset_by_path(filename: str, path: str):
+    """Отдаёт ресурс ленда по относительному пути внутри превью.
+
+    Скрипты ленда во время работы сами тянут файлы относительным URL
+    (например `fetch('js/lang.json')`) — браузер резолвит их относительно
+    `/api/preview/{filename}/render` → `/api/preview/{filename}/js/lang.json`.
+    Переписыватель атрибутов такие рантайм-запросы не ловит, поэтому нужен
+    этот catch-all. Зарегистрирован ПОСЛЕ /file, /files, /render — они
+    матчатся раньше как более специфичные."""
+    return _serve_preview_file(filename, path)
+
 
 @router.post("/optimize/scan")
 async def optimize_scan_endpoint(file: UploadFile = File(...)):

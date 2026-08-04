@@ -200,6 +200,14 @@
     {
       "label": "+91 phone script 2",
       "contains": "var prefix = \"+91 \""
+    },
+    {
+      "label": "чужая маска masked.js",
+      "contains": "masked.js"
+    },
+    {
+      "label": "чужая маска jquery.maskedinput",
+      "contains": "jquery.maskedinput"
     }
   ],
   "remove_lines_with": [
@@ -418,6 +426,14 @@
     {
       "label": "SESSION publisher_order_id",
       "contains": "$_SESSION['publisher_order_id']"
+    },
+    {
+      "label": "Cloudflare Insights beacon",
+      "contains": "cloudflareinsights.com"
+    },
+    {
+      "label": "чужая маска masked.js (строка)",
+      "contains": "masked.js"
     }
   ],
   "remove_dirs": [
@@ -602,6 +618,21 @@
     },
     {
       "path": "ywbackfix.js"
+    },
+    {
+      "path": "back.js"
+    },
+    {
+      "path": "masked.js"
+    },
+    {
+      "path": "showcase.js"
+    },
+    {
+      "path": "webpack-pro-runtime.js"
+    },
+    {
+      "path": "beacon.min.js"
     }
   ],
   "remove_inputs_by_name": [

@@ -46,11 +46,16 @@ export function NewSessionPage() {
   const [isVsl, setIsVsl] = useState(false);
   const [idsText, setIdsText] = useState('');
   const [urlsText, setUrlsText] = useState('');
+  // Прокси для скачивания лендов по ссылке (гео-защита) — из библиотеки бэка.
+  const [proxies, setProxies] = useState<{ id: string; label: string; server: string; geo: string }[]>([]);
+  const [proxyId, setProxyId] = useState('');
   const [sourceTasks, setSourceTasks] = useState<SourceTask[]>([]);
   const [files, setFiles] = useState<File[]>([]);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState('');
   const [error, setError] = useState('');
+
+  useEffect(() => { api.proxies().then(setProxies).catch(() => {}); }, []);
 
   // Префилл из одной задачи.
   useEffect(() => {
@@ -116,7 +121,7 @@ export function NewSessionPage() {
       }
       for (let i = 0; i < urls.length; i++) {
         setStatus(`Скачиваю лендинг ${i + 1}/${urls.length}…`);
-        await api.landerFromSite(s.id, urls[i], taskUid || undefined);
+        await api.landerFromSite(s.id, urls[i], taskUid || undefined, proxyId || undefined);
       }
       nav(`/sessions/${s.id}`);
     } catch (e: any) {
@@ -197,9 +202,22 @@ export function NewSessionPage() {
           style={{ resize: 'vertical', fontFamily: 'monospace', fontSize: 12 }}
         />
       </label>
+      {parseUrlsInput(urlsText).length > 0 && (
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6, fontSize: 12 }}>
+          <span className="dim" style={{ flexShrink: 0 }}>Прокси</span>
+          <select className="form-input" value={proxyId} onChange={(e) => setProxyId(e.target.value)}
+                  title="Прокси для обхода гео-защиты при скачивании"
+                  style={{ fontSize: 12, padding: '2px 6px', flex: 1 }}>
+            <option value="">без прокси</option>
+            {proxies.map((p) => (
+              <option key={p.id} value={p.id}>{p.geo ? `[${p.geo}] ` : ''}{p.label || p.server}</option>
+            ))}
+          </select>
+        </label>
+      )}
       <p className="dim small" style={{ marginTop: 6 }}>
-        Будут скачаны скрапером (Playwright). Для гео-защищённых лендов прокси
-        можно выбрать уже внутри сессии (блок «Добавить ленд»).
+        Будут скачаны скрапером (Playwright). Гео-защищённые ленды качай через
+        прокси нужной страны (добавить прокси можно внутри сессии, блок «Добавить ленд»).
       </p>
 
       <div style={{ margin: '1rem 0', textAlign: 'center', color: 'var(--text-muted,#666)', fontSize: 12 }}>— или / и —</div>

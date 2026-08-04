@@ -1,176 +1,147 @@
-import { useCallback, useEffect, useState } from 'react';
-import { api, type HealthResponse, type InfoResponse } from '../lib/api';
+import { useEffect, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import { api, type TaskSummary, type SessionSummary, type PublishedHistory, type AiStatus } from '../lib/api';
+import { Icon } from '../components/Icon';
 
-type Status = 'checking' | 'connected' | 'error';
-
+// Главная — рабочая сводка: задачи в работе, активные сессии, публикации,
+// состояние сервисов. Быстрые переходы к делу вместо служебной статистики.
 export function HomePage() {
-  const [status, setStatus] = useState<Status>('checking');
-  const [health, setHealth] = useState<HealthResponse | null>(null);
-  const [info,   setInfo]   = useState<InfoResponse | null>(null);
-  const [error,  setError]  = useState<string>('');
-  const [clearBusy, setClearBusy] = useState(false);
-  const [clearMsg, setClearMsg] = useState('');
-  const [clearIsError, setClearIsError] = useState(false);
-
-  const refreshInfo = useCallback(() => {
-    api.info().then(setInfo).catch(() => {});
-  }, []);
+  const nav = useNavigate();
+  const [tasks, setTasks] = useState<TaskSummary[] | null>(null);
+  const [sessions, setSessions] = useState<SessionSummary[] | null>(null);
+  const [published, setPublished] = useState<PublishedHistory | null>(null);
+  const [pubWeek, setPubWeek] = useState<PublishedHistory | null>(null);
+  const [ai, setAi] = useState<AiStatus | null>(null);
+  const [backendOk, setBackendOk] = useState<boolean | null>(null);
+  const [err, setErr] = useState('');
 
   useEffect(() => {
-    Promise.all([api.health(), api.info()])
-      .then(([h, i]) => {
-        setHealth(h);
-        setInfo(i);
-        setStatus('connected');
-      })
-      .catch((e) => {
-        setError(String(e?.message ?? e));
-        setStatus('error');
-      });
+    api.health().then(() => setBackendOk(true)).catch((e) => { setBackendOk(false); setErr(String(e?.message ?? e)); });
+    api.tasks().then(setTasks).catch(() => setTasks([]));
+    api.sessions().then(setSessions).catch(() => setSessions([]));
+    api.published('day').then(setPublished).catch(() => {});
+    api.published('week').then(setPubWeek).catch(() => {});
+    api.aiStatus().then(setAi).catch(() => {});
   }, []);
 
-  const handleClearStorage = async (scope: 'temp' | 'all') => {
-    if (scope === 'all') {
-      const ok = window.confirm(
-        'Удалить все готовые архивы из outputs/?\n\n'
-        + 'Папки assets/ и configs/ не трогаем.',
-      );
-      if (!ok) return;
-    }
-    setClearBusy(true);
-    setClearMsg('');
-    setClearIsError(false);
-    try {
-      const r = await api.clearStorage(scope);
-      setClearMsg(
-        `Очищено (${r.scope}): uploads −${r.uploads_removed}, output −${r.output_cleared}`
-        + (r.outputs_cleared ? `, outputs −${r.outputs_cleared}` : ''),
-      );
-      refreshInfo();
-    } catch (e: unknown) {
-      setClearIsError(true);
-      setClearMsg(e instanceof Error ? e.message : 'Ошибка очистки');
-    } finally {
-      setClearBusy(false);
-    }
+  const statusColor = (s: string) => {
+    const u = (s || '').toUpperCase();
+    if (u.includes('PENDING')) return '#f59e0b';
+    if (u.includes('PROCESS')) return '#7c6fff';
+    if (u.includes('REVIEW')) return '#38bdf8';
+    if (u.includes('ACCEPT')) return '#4ade80';
+    return '#94a3b8';
   };
+
+  const activeTasks = (tasks || []).filter((t) => {
+    const u = t.status.toUpperCase();
+    return u.includes('PENDING') || u.includes('PROCESS');
+  });
+  const pendingCount = activeTasks.filter((t) => t.status.toUpperCase().includes('PENDING')).length;
+  const inWorkCount = activeTasks.filter((t) => t.status.toUpperCase().includes('PROCESS')).length;
+  const todayCount = published?.groups?.length
+    ? published.groups.reduce((n, g) => n + g.count, 0) : 0;
+  const weekCount = pubWeek?.groups?.length
+    ? pubWeek.groups.reduce((n, g) => n + g.count, 0) : 0;
+
+  const Tile = ({ value, label, to, color }: { value: string | number; label: string; to: string; color?: string }) => (
+    <Link to={to} className="card" style={{ textDecoration: 'none', color: 'inherit', flex: 1, minWidth: 140 }}>
+      <div style={{ fontSize: 26, fontWeight: 700, color: color || 'var(--text)' }}>{value}</div>
+      <div className="dim small">{label}</div>
+    </Link>
+  );
 
   return (
     <div className="page">
-      <div className="page-header">
-        <h1>Главная</h1>
-        <p className="muted">Состояние сервиса и текущая статистика</p>
+      <div className="page-header" style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <div>
+          <h1>Главная</h1>
+          <p className="muted">Что сейчас в работе</p>
+        </div>
+        <div style={{ flex: 1 }} />
+        {backendOk === false && (
+          <span className="small" style={{ color: '#f87171' }} title={err}>⛔ бэкенд не отвечает</span>
+        )}
+        {ai?.balance != null && (
+          <span className="dim small" title="Баланс aitunnel (нейро-функции)">ИИ: {ai.balance.toFixed(0)} ₽</span>
+        )}
+        <button className="btn btn-primary" onClick={() => nav('/sessions/new')} style={{ fontSize: 13 }}>
+          <Icon name="plus" size={13} /> Новая сессия
+        </button>
+      </div>
+
+      {/* цифры дня */}
+      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 20 }}>
+        <Tile value={pendingCount} label="задач ждут (PENDING)" to="/tasks" color="#f59e0b" />
+        <Tile value={inWorkCount} label="задач в работе" to="/tasks" color="#7c6fff" />
+        <Tile value={(sessions || []).length} label="активных сессий" to="/sessions" />
+        <Tile value={todayCount} label="залито сегодня" to="/published" color="#4ade80" />
+        <Tile value={weekCount} label="залито за неделю" to="/published" />
       </div>
 
       <div className="grid-2">
-        {/* Статус соединения */}
+        {/* задачи */}
         <div className="card">
-          <div className="card-label">Соединение с бэкендом</div>
-
-          {status === 'checking' && (
-            <div className="status-row">
-              <div className="dot dot-warning" />
-              <div>
-                <div className="status-text">Проверяю...</div>
-                <div className="dim small">localhost:8000</div>
-              </div>
-            </div>
-          )}
-
-          {status === 'connected' && health && (
-            <div className="status-row">
-              <div className="dot dot-success" />
-              <div>
-                <div className="status-text">Подключено</div>
-                <div className="dim small">
-                  {health.service} · {health.version}
-                </div>
-              </div>
-            </div>
-          )}
-
-          {status === 'error' && (
-            <div className="status-row">
-              <div className="dot dot-danger" />
-              <div>
-                <div className="status-text">Бэкенд не отвечает</div>
-                <div className="dim small mono">{error}</div>
-                <div className="muted small" style={{ marginTop: 8 }}>
-                  Запусти <code className="mono">start.bat</code> или проверь, что{' '}
-                  <code className="mono">uvicorn</code> работает на :8000
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Статистика + очистка */}
-        <div className="card storage-stats-card">
-          <div className="storage-stats-card-head">
-            <div className="card-label" style={{ marginBottom: 0 }}>Файлы в storage</div>
-            {status === 'connected' && (
-              <div className="storage-clear-actions">
-                <button
-                  type="button"
-                  className="btn btn-sm"
-                  disabled={clearBusy}
-                  title="Удалить загрузки (uploads) и черновик (output). Готовые ZIP не трогаем."
-                  onClick={() => void handleClearStorage('temp')}
-                >
-                  {clearBusy ? '…' : 'Очистить временное'}
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-sm btn-danger-outline"
-                  disabled={clearBusy}
-                  title="То же + все файлы в outputs/ (готовые архивы)."
-                  onClick={() => void handleClearStorage('all')}
-                >
-                  + готовые ZIP
-                </button>
-              </div>
-            )}
+          <div className="card-label" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            Задачи <Link to="/tasks" className="dim small" style={{ marginLeft: 'auto' }}>все →</Link>
           </div>
-          {info ? (
-            <>
-              <div className="stats-grid">
-                <div className="stat">
-                  <div className="stat-value">{info.uploads}</div>
-                  <div className="stat-label">uploads</div>
-                </div>
-                <div className="stat">
-                  <div className="stat-value">{info.outputs}</div>
-                  <div className="stat-label">готовые</div>
-                </div>
-                <div className="stat">
-                  <div className="stat-value">{info.assets}</div>
-                  <div className="stat-label">фото</div>
-                </div>
-                <div className="stat">
-                  <div className="stat-value">{info.configs}</div>
-                  <div className="stat-label">конфиги</div>
-                </div>
+          {tasks === null && <p className="dim small">Загружаю…</p>}
+          {tasks !== null && activeTasks.length === 0 && <p className="dim small">Нет задач в очереди — отдыхай.</p>}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {activeTasks.slice(0, 7).map((t) => (
+              <div key={t.uid} style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}
+                   onClick={() => nav('/tasks')} title={t.title}>
+                <span style={{ width: 8, height: 8, borderRadius: 999, flexShrink: 0, background: statusColor(t.status) }} />
+                {t.created && <span className="dim small mono" style={{ flexShrink: 0 }}>{t.created}</span>}
+                <span style={{ fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {t.offer || t.title}
+                </span>
+                <span className="dim small" style={{ marginLeft: 'auto', flexShrink: 0 }}>{t.status}</span>
               </div>
-              {clearMsg && (
-                <p className={`storage-clear-msg dim small ${clearIsError ? 'error-text' : ''}`}>
-                  {clearMsg}
-                </p>
-              )}
-            </>
-          ) : (
-            <div className="muted small">Ожидание данных...</div>
-          )}
+            ))}
+          </div>
+        </div>
+
+        {/* сессии */}
+        <div className="card">
+          <div className="card-label" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            Сессии адаптации <Link to="/sessions" className="dim small" style={{ marginLeft: 'auto' }}>все →</Link>
+          </div>
+          {sessions === null && <p className="dim small">Загружаю…</p>}
+          {sessions !== null && sessions.length === 0 && <p className="dim small">Активных сессий нет.</p>}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {(sessions || []).slice(0, 7).map((s) => (
+              <Link key={s.id} to={`/sessions/${s.id}`}
+                    style={{ display: 'flex', alignItems: 'center', gap: 8, textDecoration: 'none', color: 'inherit' }}>
+                <Icon name="play" size={12} />
+                <span style={{ fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {s.offer || s.task_title || s.id}
+                </span>
+                <span className="dim small" style={{ marginLeft: 'auto', flexShrink: 0 }}>
+                  {Object.keys(s.landers || {}).length} ленд(ов) · {s.status}
+                </span>
+              </Link>
+            ))}
+          </div>
         </div>
       </div>
 
-      <div className="card" style={{ marginTop: 20 }}>
-        <div className="card-label">Скелет проекта запущен</div>
-        <p className="muted" style={{ marginTop: 4 }}>
-          В следующих этапах сюда добавятся страницы обработки.
-          Каждая будет переиспользовать твои существующие Python-скрипты
-          через FastAPI-роуты в <code className="mono">backend/main.py</code>.
-        </p>
-      </div>
+      {/* публикации за сегодня */}
+      {published && published.groups.length > 0 && (
+        <div className="card" style={{ marginTop: 20 }}>
+          <div className="card-label" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            Залито сегодня <Link to="/published" className="dim small" style={{ marginLeft: 'auto' }}>вся история →</Link>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {published.groups.map((g) => (
+              <div key={g.key} style={{ display: 'flex', gap: 10, alignItems: 'baseline', fontSize: 13 }}>
+                <span className="dim small" style={{ flexShrink: 0 }}>{g.label}</span>
+                <code className="mono" style={{ wordBreak: 'break-word' }}>{g.ids.join(', ')}</code>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

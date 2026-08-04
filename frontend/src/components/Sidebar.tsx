@@ -1,22 +1,8 @@
 import { NavLink } from 'react-router-dom';
 
-interface NavItem {
-  to: string;
-  label: string;
-  description: string;
-  icon: string;
-  status?: 'ready' | 'soon';
-}
-
-const NAV_ITEMS: NavItem[] = [
-  { to: '/scan-adapt',   label: 'Scan + Adapt',  description: 'Кейтаро · смена цен и фоток',         icon: '⚙' },
-  { to: '/clean',        label: 'Clean',         description: 'Очистка от чужого кода',              icon: '✂' },
-  { to: '/inject',       label: 'Inject',        description: 'Вставка скриптов и инпутов',          icon: '⊕' },
-  { to: '/clean-inject', label: 'Clean + Inject',description: 'Полный пайплайн от маркетологов',     icon: '⛓' },
-  { to: '/anchors',      label: 'Anchors',       description: 'Починка якорных ссылок',              icon: '⚓' },
-  { to: '/optimize',     label: 'Optimize',      description: 'Конвертация PNG/JPG → WebP, сжатие',  icon: '⤓' },
-  { to: '/preview',      label: 'Preview',       description: 'Просмотр и редактирование результата',icon: '◫' },
-];
+// Ручные инструменты (/scan-adapt, /clean, /inject, /anchors, /optimize,
+// /preview) из меню убраны — весь рабочий поток идёт через Сессии; сами
+// страницы живы и доступны по прямым ссылкам.
 
 interface SidebarProps {
   collapsed: boolean;
@@ -78,21 +64,6 @@ export function Sidebar({ collapsed, onToggle, theme, onToggleTheme }: SidebarPr
             <span className="nav-item-desc">Залитые ленды по дням/неделям</span>
           </span>
         </NavLink>
-
-        <div className="nav-section">Обработка</div>
-
-        {NAV_ITEMS.map((item) => (
-          <NavLink key={item.to} to={item.to} className="nav-item" title={item.label}>
-            <span className="nav-item-icon">{item.icon}</span>
-            <span className="nav-item-text">
-              <span className="nav-item-label">
-                {item.label}
-                {item.status === 'soon' && <span className="badge">soon</span>}
-              </span>
-              <span className="nav-item-desc">{item.description}</span>
-            </span>
-          </NavLink>
-        ))}
 
         {/* Переключатель темы — в самом низу меню */}
         <button

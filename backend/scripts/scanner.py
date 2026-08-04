@@ -35,6 +35,36 @@ def section(t): print(f"\n{C}{BOLD}{'─'*52}\n  {t}\n{'─'*52}{RESET}")
 # СПРАВОЧНИКИ
 # ══════════════════════════════════════════════════════════════
 
+# Модификаторы названия продукта: пометки закупки/ценового тира, а не бренд.
+# На самом ленде их НЕТ («Ultravix Resell» пишется как «Ultravix»), поэтому
+# ни в поиск по тексту, ни в новое название продукта они попадать не должны.
+# Единый источник правды — им пользуется и services/session.py.
+PRODUCT_MODIFIERS = {
+    "low", "high", "price", "mid", "medium",
+    "resell", "reseller", "misslead", "mislead",
+    "pro", "plus", "adult", "2", "3",
+}
+
+
+def strip_product_modifiers(product: str, keep_if_empty: bool = True) -> str:
+    """Оставляет от названия продукта только ЯДРО бренда — обрезает по первому
+    модификатору: 'Ultravix Resell' → 'Ultravix', 'Libidex High Price' →
+    'Libidex', 'Shiitake Adult Low' → 'Shiitake'.
+
+    keep_if_empty=True (по умолчанию): если название состоит из ОДНИХ
+    модификаторов ('Low Price') — вернём его как есть, лучше странный продукт,
+    чем пустой. keep_if_empty=False — вернём '' (для отсева кандидатов
+    сканера: 'Low Price' продуктом быть не может).
+    """
+    core: list[str] = []
+    for t in (product or "").split():
+        if t.lower().strip('.,') in PRODUCT_MODIFIERS:
+            break
+        core.append(t)
+    if core:
+        return " ".join(core)
+    return (product or "").strip() if keep_if_empty else ""
+
 
 
 # Символьные валюты → ISO-код
@@ -196,8 +226,8 @@ def detect_product_candidates(text: str) -> list[tuple[str, int]]:
     # Однословные капитализированные (не ALL_CAPS)
     counts: dict[str, int] = {}
     for m in re.finditer(r'\b([A-Z][a-z]{2,}(?:\s+[A-Z][a-z]+)?)\b', clean):
-        word = m.group(1).strip()
-        if word not in SKIP and len(word) > 2:
+        word = strip_product_modifiers(m.group(1).strip(), keep_if_empty=False)
+        if word and word not in SKIP and len(word) > 2:
             counts[word] = counts.get(word, 0) + 1
 
     # Фильтруем — минимум 3 вхождения
@@ -217,6 +247,13 @@ def detect_prices(text: str) -> tuple[str | None, str | None, str | None]:
     Возвращает (валюта_как_в_файле, цена_новая_строка, цена_старая_строка).
     Например: ("zł", "99 zł", "198 zł")
     """
+    import html as _html
+    # Валюта в лендах бывает HTML-сущностью: data-new-price="29&euro;",
+    # "156&#8364;", "1&nbsp;290 zł" — без раскодирования &euro; не узнаётся
+    # как €, и цена «не определяется» (реальный кейс: 18577 Immuxin HU).
+    if "&" in text:
+        text = _html.unescape(text).replace(" ", " ")
+
     candidates = []  # (число, строка_с_валютой, iso_код, символ_как_в_файле)
 
     # Чистый текст без PHP для поиска символьных валют (чтобы $ не ломал)

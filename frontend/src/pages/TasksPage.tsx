@@ -268,6 +268,10 @@ function TaskRow({ t, selected, onToggleSelect, onCreateSession, onChanged }: {
         </span>
         <div style={{ flex: 1, minWidth: 0, cursor: 'pointer' }} onClick={toggle}>
           <div style={{ fontSize: 14, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {t.created && (
+              <span className="dim" style={{ fontFamily: 'monospace', fontSize: 12, marginRight: 8 }}
+                    title="Когда задача была поставлена">{t.created}</span>
+            )}
             {t.offer || t.title}
           </div>
           <div className="dim small" style={{ marginTop: 2 }}>
