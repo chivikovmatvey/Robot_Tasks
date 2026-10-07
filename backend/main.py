@@ -86,6 +86,18 @@ async def lifespan(app: FastAPI):
         import logging
         logging.getLogger("session").exception("Не удалось сбросить повисшие статусы")
 
+    # Архивы в outputs/ без живой сессии: ленды сносят свои сами, но остаются
+    # результаты standalone-обработки («инструменты») и хвосты от старых версий —
+    # иначе папка растёт бесконечно. Строго после загрузки менеджера сессий:
+    # чистка сверяется с sessions/*.json. Отключается OFFER_OUTPUTS_CLEANUP=off.
+    try:
+        from utils.outputs_cleanup import cleanup_on_startup
+        cleanup_on_startup(STORAGE)
+    except Exception:  # noqa: BLE001
+        import logging
+        logging.getLogger("outputs-cleanup").exception(
+            "Не удалось почистить storage/outputs")
+
     if intake is not None:
         import os
         interval = int(os.getenv("POLL_INTERVAL", "60") or "60")
@@ -339,7 +351,7 @@ def tasks_poll(request: Request, notify: int = 1):
 
 
 class TaskStatusBody(BaseModel):
-    status: str = Field("IN_PROCESS", description="IN_PROCESS | NEED_DETAILS")
+    status: str = Field("IN_PROCESS", description="IN_PROCESS | NEED_DETAILS | REVIEW")
 
 
 @app.post("/api/tasks/{uid}/status")
@@ -1073,6 +1085,13 @@ def session_set_lander_group(request: Request, sid: str, lid: str, body: LanderG
             intake, mgr, sid, lid, s.lander_offer(ls))
     except Exception:  # noqa: BLE001 — фото не критично для смены группы
         suggest["photos_added"] = 0
+    # VSL: значения живут в config.php — переподтягиваем их под НОВУЮ группу.
+    try:
+        if getattr(mgr.get(sid), "is_vsl", False):
+            from services import vsl
+            suggest["vsl_config"] = vsl.sync_config(sid, lid, force=True)
+    except Exception:  # noqa: BLE001
+        _logging.getLogger("api").exception("VSL-синк после смены группы %s/%s", sid, lid)
     return suggest
 
 
@@ -1110,9 +1129,16 @@ def session_adapt(sid: str, lid: str, body: AdaptBody):
 # ── VSL: конфиг, фото продукта, видео ────────────────────────
 @app.get("/api/sessions/{sid}/landers/{lid}/vsl-config")
 def vsl_config_get(sid: str, lid: str):
-    """Читает $config из config.php ленда (output-копия, иначе исходник)."""
+    """Читает $config из config.php ленда (output-копия, иначе исходник).
+
+    Перед чтением ОДИН РАЗ подтягивает данные задачи/группы (продукт, цены,
+    гео) — панель должна показывать новые значения, а не донорские."""
     from services import vsl
     try:
+        try:
+            vsl.sync_config(sid, lid)
+        except Exception:  # noqa: BLE001 — синк не должен ломать чтение
+            _logging.getLogger("api").exception("VSL-синк конфига %s/%s", sid, lid)
         return vsl.read_config(sid, lid)
     except KeyError as e:
         raise HTTPException(404, str(e))
@@ -1206,6 +1232,23 @@ def vsl_comments_translate(sid: str, lid: str, body: VslCommentsTranslateBody):
     from services import vsl_comments
     try:
         return vsl_comments.translate_comments(sid, lid, body.target_lang)
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+
+
+class VslTitleTranslateBody(BaseModel):
+    target_lang: str | None = Field(None, description="Язык (пусто = по гео)")
+
+
+@app.post("/api/sessions/{sid}/landers/{lid}/vsl/title/translate")
+def vsl_title_translate(sid: str, lid: str, body: VslTitleTranslateBody):
+    """Перевести ЗАГОЛОВОК VSL-ленда (title.text + выделенные фразы) отдельно
+    от остального текста: в общий перевод заголовок не входит."""
+    from services import translate
+    try:
+        return translate.translate_vsl_title(sid, lid, target_lang=body.target_lang)
     except KeyError as e:
         raise HTTPException(404, str(e))
     except ValueError as e:
@@ -1836,18 +1879,22 @@ def ai_status():
     """Настроен ли AI-агент (ключ AITUNNEL и/или локальная модель) + баланс."""
     import os
     from connectors.aitunnel import (client_from_env, DEFAULT_MODEL,
-                                     available_models, local_llm_info)
+                                     available_models, local_llm_info,
+                                     endpoint_info)
     client = client_from_env()
     local = local_llm_info()
     if client is None:
         return {"configured": False, "model": None, "balance": None,
-                "models": [], "local": None}
+                "models": [], "local": None, "endpoint": None}
+    balance = client.balance()
     return {
         "configured": True,
         "model": os.getenv("AITUNNEL_MODEL", DEFAULT_MODEL),
-        "balance": client.balance(),
+        "balance": balance,
         "models": available_models(),
         "local": local,  # {base_url, model} | null — локальный сервер
+        # какой IP api.aitunnel.ru выбран (обход зависших подсетей Cloudflare)
+        "endpoint": endpoint_info(),
     }
 
 

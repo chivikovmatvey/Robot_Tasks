@@ -164,6 +164,9 @@ export function VslPanel({ sid, lid, hasOutput, onChanged }: {
   const [imgBusy, setImgBusy] = useState(false);
   const [groupPhotoNote, setGroupPhotoNote] = useState('');
   const [commentsOpen, setCommentsOpen] = useState(false);  // блок комментов свёрнут по умолчанию
+  // перевод заголовка (отдельно от общего перевода ленда)
+  const [titleBusy, setTitleBusy] = useState(false);
+  const [titleNote, setTitleNote] = useState('');
   // библиотека комментариев по вертикалям
   const [commentsLib, setCommentsLib] = useState<{ code: string; vertical: string; sets: number; comments: number; langs: string[] }[]>([]);
   const [libVert, setLibVert] = useState('');
@@ -345,6 +348,25 @@ export function VslPanel({ sid, lid, hasOutput, onChanged }: {
     } finally { setLibBusy(''); }
   };
 
+  // Заголовок переводится ОТДЕЛЬНО: общий «Перевод» ленда его не трогает
+  // (фразы подсветки должны остаться подстроками заголовка).
+  const translateTitle = async () => {
+    if (!cfg) return;
+    setTitleBusy(true); setTitleNote('перевожу заголовок…');
+    try {
+      if (dirty) await api.vslConfigSave(sid, lid, cfg);
+      const r = await api.vslTitleTranslate(sid, lid);
+      // Точечный мёрж (loadConfig стёр бы правки других полей).
+      setCfg((c) => (c ? { ...c, title: { ...(c.title || {}), text: r.translated, highlightPhrases: r.phrases } } : c));
+      setDirty(false);
+      setTitleNote(`Переведено на ${r.lang}, выделенных фраз: ${r.phrases.length}`
+        + (r.warnings.length ? ` — ${r.warnings.join('; ')}` : ''));
+      onChanged();
+    } catch (e: any) {
+      setTitleNote(e.message || 'Ошибка перевода заголовка');
+    } finally { setTitleBusy(false); }
+  };
+
   const harvestLibComments = async () => {
     if (!confirm('Собрать комментарии из VSL-офферов Keitaro? Это скачивание лендов, займёт несколько минут.')) return;
     setLibBusy('harvest'); setHarvestLog([]); setLibNote('');
@@ -455,8 +477,19 @@ export function VslPanel({ sid, lid, hasOutput, onChanged }: {
       </div>
 
       <FieldRow label="Заголовок (title.text)">
-        <textarea className="form-input" style={{ ...inputStyle, resize: 'vertical' }} rows={3}
-                  value={title.text || ''} onChange={(e) => setPath(['title', 'text'], e.target.value)} />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <textarea className="form-input" style={{ ...inputStyle, resize: 'vertical' }} rows={3}
+                    value={title.text || ''} onChange={(e) => setPath(['title', 'text'], e.target.value)} />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <button className="btn" disabled={titleBusy || !title.text} onClick={translateTitle}
+                    title="Перевести заголовок и выделенные фразы на язык гео ленда. Общий «Перевод» ленда заголовок не трогает."
+                    style={{ fontSize: 11 }}>
+              <Icon name="globe" size={12} /> {titleBusy ? 'Перевожу…' : 'Перевести заголовок'}
+            </button>
+            <span className="dim small">переводится отдельно от остального текста</span>
+          </div>
+          {titleNote && <span className="dim small">{titleNote}</span>}
+        </div>
       </FieldRow>
       <FieldRow label="Выделенные красным фразы (highlightPhrases)">
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>

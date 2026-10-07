@@ -238,6 +238,10 @@ class LanderState:
     scan: Optional[dict] = None         # результат run_scan_only
     output_name: Optional[str] = None   # имя адаптированного zip в storage/outputs
     output_url: Optional[str] = None    # /api/download/<name>
+    # Все имена, которые ленд когда-либо занимал в storage/outputs (каждый прогон
+    # адаптации кладёт файл с новым таймстампом). Журнал нужен, чтобы при удалении
+    # ленда/сессии снести ВСЕ его архивы, а не только последний. См. _purge_outputs.
+    output_names: list[str] = field(default_factory=list)
     adapt_params: Optional[dict] = None # параметры последней адаптации
     adapt_log: list[dict] = field(default_factory=list)  # лог последнего run_adapt
     error: Optional[str] = None
@@ -327,14 +331,106 @@ class SessionManager:
             json.dumps(s.to_dict(), ensure_ascii=False, indent=2)
         )
 
+    # ── выходные архивы в storage/outputs ────────────────────────
+    # Хвостовой таймстамп в имени архива: 20701_offer_archive__GH__20260728_143540.zip
+    _OUT_TS_RE = re.compile(r"_{0,2}\d{8}_\d{6}\.zip$")
+
+    @classmethod
+    def _output_stem(cls, name: str) -> Optional[str]:
+        """«Основа» имени архива без хвостового таймстампа.
+
+        По ней ловятся ВСЕ копии одного ленда: каждый прогон адаптации кладёт
+        в outputs/ новый файл с новым таймстампом. None — если таймстампа нет
+        (такие имена сопоставляем только точно).
+        """
+        stem = cls._OUT_TS_RE.sub("", name)
+        return stem if stem and stem != name else None
+
+    @staticmethod
+    def _lander_outputs(ls: LanderState) -> set[str]:
+        """Все имена архивов, которые ленд занимал в outputs/ (текущее + журнал
+        + имена из снимков истории)."""
+        names = {n for n in (ls.output_names or []) if n}
+        if ls.output_name:
+            names.add(ls.output_name)
+        for h in (ls.history or []):
+            n = h.get("output_name")
+            if n:
+                names.add(n)
+        return names
+
+    def _live_outputs(self, skip_sid: Optional[str] = None,
+                      skip_lid: Optional[str] = None) -> set[str]:
+        """Архивы, занятые ОСТАЛЬНЫМИ лендами — их не трогаем ни при каких чистках.
+
+        skip_lid=None вместе с skip_sid = пропустить всю сессию (она удаляется).
+        """
+        with self._lock:
+            sessions = list(self._sessions.values())
+        names: set[str] = set()
+        for s in sessions:
+            for lid, ls in (s.landers or {}).items():
+                if s.id == skip_sid and (skip_lid is None or skip_lid == lid):
+                    continue
+                names |= self._lander_outputs(ls)
+        return names
+
+    def _purge_outputs(self, names: set[str], keep: set[str]) -> int:
+        """Стирает из storage/outputs указанные архивы И все их копии (то же имя
+        с другим таймстампом), кроме занятых живыми лендами."""
+        from utils.runners import STORAGE
+        names = {n for n in names if n} - keep
+        outs = STORAGE / "outputs"
+        if not names or not outs.is_dir():
+            return 0
+        keep_stems = {st for st in map(self._output_stem, keep) if st}
+        stems = {st for st in map(self._output_stem, names) if st} - keep_stems
+        n = 0
+        for p in outs.glob("*.zip"):
+            if p.name in keep:
+                continue
+            if p.name in names or self._output_stem(p.name) in stems:
+                p.unlink(missing_ok=True)
+                n += 1
+        return n
+
+    def set_output(self, s: AdaptationSession, ls: LanderState,
+                   out_path: str | Path, drop_previous: bool = True) -> None:
+        """Назначает ленду новый output-архив и ведёт журнал его имён.
+
+        Прежний архив сразу удаляется (drop_previous): его снимок, если нужен,
+        уже лежит в history/ — иначе outputs/ пухнет копиями одного ленда.
+        Статус ленда вызывающий выставляет сам.
+        """
+        from utils.files import output_relative_url
+        name = Path(out_path).name
+        prev = ls.output_name
+        ls.output_name = name
+        ls.output_url = output_relative_url(out_path)
+        if ls.output_names is None:
+            ls.output_names = []
+        if name not in ls.output_names:
+            ls.output_names.append(name)
+        if drop_previous and prev and prev != name:
+            keep = self._live_outputs(s.id, ls.lander_id) | {name}
+            if prev not in keep:
+                from utils.runners import STORAGE
+                (STORAGE / "outputs" / prev).unlink(missing_ok=True)
+                if prev in ls.output_names:
+                    ls.output_names.remove(prev)
+
     def _load_all(self) -> None:
         from dataclasses import fields as _fields
         known = {fld.name for fld in _fields(AdaptationSession)}
         for f in self.dir.glob("*.json"):
             try:
                 raw = json.loads(f.read_text())
+                # У лендов тоже есть ВЫЧИСЛЯЕМЫЕ ключи (output_size из to_dict) —
+                # без фильтра LanderState(**ls) падал и вся сессия «терялась».
+                known_ls = {fld.name for fld in _fields(LanderState)}
                 landers = {
-                    lid: LanderState(**ls) for lid, ls in raw.get("landers", {}).items()
+                    lid: LanderState(**{k: v for k, v in ls.items() if k in known_ls})
+                    for lid, ls in raw.get("landers", {}).items()
                 }
                 raw["landers"] = landers
                 # Отбрасываем вычисляемые/неизвестные ключи (напр. expires_at).
@@ -568,13 +664,24 @@ class SessionManager:
         return s
 
     def delete(self, sid: str) -> None:
-        """Полностью стирает сессию: метаданные и папку с архивами лендов."""
+        """Полностью стирает сессию: метаданные, папку с архивами лендов и все
+        адаптированные zip её лендов в storage/outputs (включая копии)."""
         import shutil
+        s = self._sessions.get(sid)
+        # keep считаем ДО взятия лока: _live_outputs берёт его сам.
+        names: set[str] = set()
+        keep: set[str] = set()
+        if s is not None:
+            for ls in (s.landers or {}).values():
+                names |= self._lander_outputs(ls)
+            keep = self._live_outputs(skip_sid=sid)
         with self._lock:
             self._sessions.pop(sid, None)
             self._meta_path(sid).unlink(missing_ok=True)
             shutil.rmtree(self.dir / sid, ignore_errors=True)
-        log.info("Сессия %s полностью удалена", sid)
+        n_out = self._purge_outputs(names, keep)
+        log.info("Сессия %s полностью удалена (архивов в outputs стёрто: %d)",
+                 sid, n_out)
 
     def _cleanup_expired(self) -> None:
         """Удаляет архивные сессии старше ARCHIVE_TTL_SECONDS."""
@@ -772,10 +879,9 @@ class SessionManager:
         import shutil
         s, ls = self._get_lander(sid, lid)
 
-        # выходной архив в storage/outputs
-        if ls.output_name:
-            from utils.runners import STORAGE
-            (STORAGE / "outputs" / ls.output_name).unlink(missing_ok=True)
+        # выходные архивы в storage/outputs — текущий и все прежние копии
+        self._purge_outputs(self._lander_outputs(ls),
+                            keep=self._live_outputs(sid, lid))
 
         # скачанный/загруженный архив ленда
         if ls.zip_path:
@@ -816,9 +922,8 @@ class SessionManager:
             raise ValueError(
                 "Переустановка доступна только лендам, скачанным из Keitaro (числовой id)")
 
-        if ls.output_name:
-            from utils.runners import STORAGE
-            (STORAGE / "outputs" / ls.output_name).unlink(missing_ok=True)
+        self._purge_outputs(self._lander_outputs(ls),
+                            keep=self._live_outputs(sid, lid))
         if ls.zip_path:
             Path(ls.zip_path).unlink(missing_ok=True)
         shutil.rmtree(self._history_dir(sid, lid), ignore_errors=True)
@@ -893,6 +998,7 @@ class SessionManager:
             scan=copy.deepcopy(ls.scan),
             output_name=new_output_name,
             output_url=new_output_url,
+            output_names=[new_output_name] if new_output_name else [],
             # дубль НЕ заливался — статус заливки оригинала не наследуем,
             # иначе копия выглядела бы «уже залитой»
             adapt_params={k: v for k, v in copy.deepcopy(ls.adapt_params).items()
@@ -1406,8 +1512,8 @@ class SessionManager:
         dst = STORAGE / "outputs" / out_name
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(snap, dst)
-        ls.output_name = out_name
-        ls.output_url = output_relative_url(dst)
+        # Откат пишет в тот же файл — прежний архив стирать нечего.
+        self.set_output(s, ls, dst, drop_previous=False)
         ls.status = LanderStatus.ADAPTED
         ls.error = None
         ls.current_version = version_id  # после отката текущая = выбранная версия
@@ -1489,8 +1595,7 @@ class SessionManager:
                          + "; ".join(mod_notes), "level": "success"}
             ] + ls.adapt_log
         if out_path:
-            ls.output_name = Path(out_path).name
-            ls.output_url = output_relative_url(out_path)
+            self.set_output(s, ls, out_path)
             ls.status = LanderStatus.ADAPTED
         else:
             ls.status = LanderStatus.ERROR
@@ -1568,9 +1673,7 @@ class SessionManager:
             return {"success": False, "log": log_dicts,
                     "error": "Оптимизация не вернула результат"}
 
-        from utils.files import output_relative_url
-        ls.output_name = Path(out_path).name
-        ls.output_url = output_relative_url(out_path)
+        self.set_output(s, ls, out_path)
         if ls.status not in (LanderStatus.ADAPTED,):
             ls.status = LanderStatus.ADAPTED
         ls.adapt_log = (ls.adapt_log or []) + log_dicts

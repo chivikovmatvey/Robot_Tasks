@@ -6,8 +6,9 @@
   - получение списка задач-офферов с фильтром по статусу/исполнителю,
   - парсинг карточки задачи в структуру (поля, варианты, активность).
 
-Ничего не меняет на аккаунте: только GET-запросы на чтение
-(переходы статуса вроде "Start working" здесь НЕ реализованы).
+С 2026-10 список и карточка задачи — Angular-SPA, всё берётся из JSON-API
+/planning/api/kt_offer_tasks/. Меняющие действия (смена статуса, варианты)
+— только явные методы change_status/add_variant/move_variants.
 """
 
 from __future__ import annotations
@@ -15,8 +16,9 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Optional
-from urllib.parse import urljoin, quote
+from urllib.parse import urljoin, quote, urlparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -26,6 +28,11 @@ log = logging.getLogger("adrobot.client")
 LOGIN_PATH = "/accounts/login/"
 TASKS_PATH = "/planning/tasks/offers/"
 NOTIFICATIONS_PATH = "/common/notifications/"
+# JSON-API списка задач (DRF-пагинация {count,next,previous,results}; сервер
+# режет page_size до 100).
+TASKS_API_PATH = "/planning/api/kt_offer_tasks/"
+TASKS_API_PAGE_SIZE = 100
+TASKS_API_MAX_PAGES = 10
 
 USER_AGENT = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
@@ -33,20 +40,12 @@ USER_AGENT = (
 )
 
 
-# «31 Jul 18:16» (первая строка ячейки Task) → «18:16 31.07».
-_MONTHS_EN = {m: i for i, m in enumerate(
-    ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
-     "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"], start=1)}
-
-
-def _fmt_created(td0_text: str) -> str:
-    m = re.search(r"\b(\d{1,2})\s+([A-Za-z]{3})\.?\s+(\d{1,2}:\d{2})\b", td0_text or "")
-    if not m:
-        return ""
-    day, mon, hhmm = m.group(1), _MONTHS_EN.get(m.group(2).capitalize()), m.group(3)
-    if not mon:
-        return ""
-    return f"{hhmm} {int(day):02d}.{mon:02d}"
+def _parse_iso(value: Optional[str]) -> Optional[datetime]:
+    """«2026-09-30T13:43:34.235684» из API → datetime (None, если пусто/битое)."""
+    try:
+        return datetime.fromisoformat(value) if value else None
+    except ValueError:
+        return None
 
 
 @dataclass
@@ -99,6 +98,8 @@ class TaskDetail:
     attachments: list[CommentAttachment] = field(default_factory=list)
     # подписи доступных кнопок статуса (например "Start working", "Need details")
     actions: list[str] = field(default_factory=list)
+    # те же кнопки как {код статуса: подпись} — что сейчас можно сделать с задачей
+    transitions: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -232,15 +233,24 @@ class AdRobotClient:
         assigned_any_of — клиентский фильтр: оставить строки, где assigned_to
                           содержит ЛЮБУЮ из подстрок (напр. ["anyone", "mch"]).
         """
-        params = []
-        if status and status.upper() != "ANY":
-            params.append(("status", status))
+        # Список задач — Angular-SPA (с 2026-09 в HTML только <app-root>),
+        # данные берём из того же JSON-API, что и фронт AdRobot.
+        params: dict[str, str | int] = {"page_size": TASKS_API_PAGE_SIZE}
+        any_status = not status or status.upper() == "ANY"
+        if not any_status:
+            params["status"] = status
         if assigned_to and assigned_to.upper() != "ANY":
-            params.append(("assigned_to", assigned_to))
-        query = "&".join(f"{k}={quote(str(v))}" for k, v in params)
-        path = TASKS_PATH + (f"?{query}" if query else "")
-        resp = self._get(path)
-        tasks = self._parse_list(resp.text)
+            params["assigned_to"] = assigned_to
+        # Без фильтра статуса это вся история (сотни задач) — хватит свежей
+        # страницы, как раньше в HTML-списке; по статусу — листаем всё.
+        max_pages = 1 if any_status else TASKS_API_MAX_PAGES
+        tasks: list[TaskSummary] = []
+        for page in range(1, max_pages + 1):
+            params["page"] = page
+            data = self._get(TASKS_API_PATH, params=params).json()
+            tasks.extend(self._parse_list_json(data.get("results") or []))
+            if not data.get("next"):
+                break
         needles = [n.strip().lower() for n in (assigned_any_of or []) if n.strip()]
         if assigned_text and assigned_text.strip():
             needles.append(assigned_text.strip().lower())
@@ -251,37 +261,39 @@ class AdRobotClient:
             ]
         return tasks
 
-    def _parse_list(self, html: str) -> list[TaskSummary]:
-        soup = BeautifulSoup(html, "html.parser")
+    def _parse_list_json(self, results: list[dict]) -> list[TaskSummary]:
+        """Строки из /planning/api/kt_offer_tasks/ → TaskSummary.
+
+        Поля приводим к виду старого HTML-списка, чтобы не трогать потребителей:
+        title «30.09 PR Solveex TR» (как <title> карточки), assigned_to —
+        ник / «Anyone» / «Preferred assignees: nch» (на это завязан фильтр пула).
+        """
         out: list[TaskSummary] = []
-        for tr in soup.select("tr"):
-            link = tr.find("a", href=re.compile(r"/planning/tasks/offers/[0-9a-f-]{36}/"))
-            if not link:
+        for r in results:
+            uid = r.get("uuid") or ""
+            if not uid:
                 continue
-            href = link["href"]
-            m = re.search(r"/planning/tasks/offers/([0-9a-f-]{36})/", href)
-            if not m:
-                continue
-            uid = m.group(1)
-            tds = tr.find_all("td", recursive=False)
-            ts = TaskSummary(uid=uid, url=self._url(href))
-            ts.title = link.get_text(" ", strip=True)
-            if tds:
-                td0 = tds[0].get_text("\n", strip=True)
-                # колонка Task: дата постановки («31 Jul 18:16») + Deadline
-                dl = re.search(r"Deadline:\s*([^<\n]+)", td0)
-                if dl:
-                    ts.deadline = dl.group(1).strip()
-                ts.created = _fmt_created(td0)
-            # колонки: Task, Created by, Assigned to, Status, Offer, Category, ...
-            def col(i):
-                return tds[i].get_text(" ", strip=True) if i < len(tds) else ""
-            ts.created_by = col(1)
-            ts.assigned_to = col(2)
-            ts.status = col(3)
-            ts.offer = col(4)
-            ts.category = col(5)
-            out.append(ts)
+            group = (r.get("kt_offer_group") or {}).get("name") or ""
+            created = _parse_iso(r.get("created_at"))
+            deadline = _parse_iso(r.get("deadline"))
+            if r.get("assigned_to"):
+                assigned = r["assigned_to"]
+            elif r.get("preferred_assignees"):
+                assigned = "Preferred assignees: " + ", ".join(r["preferred_assignees"])
+            else:
+                assigned = "Anyone"
+            out.append(TaskSummary(
+                uid=uid,
+                url=r.get("web_url") or self._url(f"{TASKS_PATH}{uid}/"),
+                title=" ".join(x for x in (created.strftime("%d.%m") if created else "", group) if x),
+                created_by=r.get("created_by") or "",
+                assigned_to=assigned,
+                status=r.get("status") or "",
+                offer=group,
+                category=r.get("request_category_display") or r.get("request_category") or "",
+                deadline=deadline.strftime("%d.%m") if deadline else "",
+                created=created.strftime("%H:%M %d.%m") if created else "",
+            ))
         return out
 
     def get_task(self, uid_or_url: str) -> TaskDetail:
@@ -292,13 +304,65 @@ class AdRobotClient:
             path = url[len(self.base_url):] if url.startswith(self.base_url) else url
         else:
             uid = uid_or_url.strip("/").split("/")[-1]
-            path = f"{TASKS_PATH}{uid}/"
-            url = self._url(path)
-        resp = self._get(path)
-        detail = self._parse_detail(resp.text)
-        detail.uid = uid
+            url = self._url(f"{TASKS_PATH}{uid}/")
+        # Карточка — Angular-SPA (с 2026-10 в HTML только <app-root>), данные
+        # берём из JSON-API, которым пользуется сам фронт AdRobot.
+        data = self._get(f"{TASKS_API_PATH}{uid}/").json()
+        detail = self._parse_detail_json(data)
+        detail.uid = data.get("uuid") or uid
         detail.url = url
         return detail
+
+    def _post_api(self, path: str, payload: dict) -> dict:
+        """POST в JSON-API AdRobot (Django REST + сессия).
+
+        Angular шлёт CSRF стандартно; т.к. сервер выдаёт cookie `csrftoken`,
+        кладём его и в Django-заголовок X-CSRFToken, и в Angular X-XSRF-TOKEN.
+        Ошибка DRF (`{"detail": ...}` / `{"поле": [...]}`) → RuntimeError с текстом.
+        """
+        if not self._logged_in:
+            self.login()
+        url = self._url(path)
+        for attempt in range(2):
+            token = self._csrf()
+            resp = self.session.post(
+                url, json=payload, timeout=self.timeout,
+                headers={"X-CSRFToken": token, "X-XSRF-TOKEN": token,
+                         "Referer": self._url(TASKS_PATH),
+                         "Accept": "application/json"},
+            )
+            if resp.status_code in (401, 403) and attempt == 0 \
+                    and "csrf" not in resp.text.lower():
+                # протухла сессия — перелогин и повтор
+                self._logged_in = False
+                self.login()
+                continue
+            break
+        if resp.status_code >= 400:
+            raise RuntimeError(self._api_error(resp))
+        try:
+            return resp.json()
+        except ValueError:
+            return {}
+
+    @staticmethod
+    def _api_error(resp: requests.Response) -> str:
+        try:
+            data = resp.json()
+        except ValueError:
+            return f"HTTP {resp.status_code}: {resp.text[:200]}"
+        if isinstance(data, dict):
+            if data.get("detail"):
+                return str(data["detail"])
+            parts = []
+            for k, v in data.items():
+                msg = "; ".join(map(str, v)) if isinstance(v, list) else str(v)
+                parts.append(msg if k == "non_field_errors" else f"{k}: {msg}")
+            if parts:
+                return " | ".join(parts)
+        if isinstance(data, list) and data:
+            return "; ".join(map(str, data))
+        return f"HTTP {resp.status_code}"
 
     # ---------- смена статуса задачи (ЕДИНСТВЕННОЕ меняющее действие) ----------
 
@@ -309,16 +373,22 @@ class AdRobotClient:
     def change_status(self, uid: str, status: str) -> TaskDetail:
         """Меняет статус задачи (напр. PENDING → IN_PROCESS, кнопка «Start working»).
 
-        Повторяет ссылку change-status с карточки. Возвращает обновлённую карточку.
+        Повторяет кнопку карточки: POST /planning/api/kt_offer_tasks/<uid>/change_status/
+        {status}. Доступные переходы сервер отдаёт в possible_status_transitions —
+        если нужного нет, не шлём (AdRobot всё равно отклонит). Возвращает
+        обновлённую карточку.
         """
         status = (status or "").strip().upper()
         if status not in self.ALLOWED_STATUS_CHANGES:
             raise ValueError(f"Недопустимый статус: {status}")
         uid = uid.strip("/").split("/")[-1]
-        next_path = f"{TASKS_PATH}{uid}/"
-        path = (f"{TASKS_PATH}{uid}/change-status/"
-                f"?status={status}&next={quote(next_path)}")
-        self._get(path)  # редирект на карточку
+        current = self.get_task(uid)
+        if status not in current.transitions:
+            allowed = ", ".join(f"{k} ({v})" for k, v in current.transitions.items()) or "нет"
+            raise RuntimeError(
+                f"Переход в {status} сейчас недоступен "
+                f"(статус {current.fields.get('Status', '?')}; можно: {allowed})")
+        self._post_api(f"{TASKS_API_PATH}{uid}/change_status/", {"status": status})
         log.info("Задача %s → статус %s", uid, status)
         return self.get_task(uid)
 
@@ -326,57 +396,33 @@ class AdRobotClient:
         """PENDING → IN_PROCESS («Start working»)."""
         return self.change_status(uid, "IN_PROCESS")
 
-    def start_working_url(self, uid: str) -> str:
-        """Абсолютный URL кнопки «Start working» (PENDING → IN_PROCESS).
-
-        Для кнопки в Telegram-уведомлении о новой задаче: клик откроет эту
-        ссылку в браузере (где есть сессия AdRobot) и переведёт задачу в работу,
-        после чего редиректит на карточку — там видно, принята задача или нет.
-        """
-        uid = uid.strip("/").split("/")[-1]
-        next_path = f"{TASKS_PATH}{uid}/"
-        return self._url(f"{TASKS_PATH}{uid}/change-status/"
-                         f"?status=IN_PROCESS&next={quote(next_path)}")
-
     # ---------- варианты задачи (Add variant / Move all / Review) ----------
 
     def add_variant(self, uid: str, offer_id: int | str) -> None:
         """Добавляет вариант (id залитого ленда Keitaro) к задаче.
 
-        Повторяет форму «Add variant»: GET страницы формы (CSRF) → POST offer_id.
-        Успех — редирект на карточку; ошибка — та же форма с errorlist."""
+        Повторяет «Add variant» карточки: POST .../<uid>/variants/ {kt_offer_id}.
+        Ошибку валидации AdRobot (нет такого ленда и т.п.) поднимаем RuntimeError."""
         uid = uid.strip("/").split("/")[-1]
-        next_path = f"{TASKS_PATH}{uid}/"
-        path = f"{TASKS_PATH}{uid}/variants/create/?next={quote(next_path)}"
-        page = self._get(path)
-        m = re.search(r'name="csrfmiddlewaretoken" value="([^"]+)"', page.text)
-        token = m.group(1) if m else self._csrf()
-        resp = self.session.post(
-            self._url(path),
-            data={"csrfmiddlewaretoken": token, "offer_id": str(offer_id)},
-            headers={"Referer": self._url(path)},
-            timeout=self.timeout,
-            allow_redirects=True,
-        )
-        resp.raise_for_status()
-        if "variants/create" in (resp.url or "") and 'id="id_offer_id"' in resp.text:
-            # форма вернулась — вытащим текст ошибки, если есть
-            soup = BeautifulSoup(resp.text, "html.parser")
-            el = soup.select_one(".errorlist, .invalid-feedback, .alert-danger")
-            err = el.get_text(" ", strip=True) if el else "форма вернулась с ошибкой"
-            raise RuntimeError(f"AdRobot не принял вариант {offer_id}: {err}")
-        log.info("Задача %s: добавлен вариант %s", uid, offer_id)
+        try:
+            kt_id = int(str(offer_id).strip())
+        except ValueError:
+            raise ValueError(f"id ленда Keitaro должен быть числом, а не {offer_id!r}")
+        try:
+            self._post_api(f"{TASKS_API_PATH}{uid}/variants/", {"kt_offer_id": kt_id})
+        except RuntimeError as e:
+            raise RuntimeError(f"AdRobot не принял вариант {kt_id}: {e}") from None
+        log.info("Задача %s: добавлен вариант %s", uid, kt_id)
 
     def move_variants(self, uid: str, scope: str) -> None:
         """«Move all to private/public group» (scope: 'private' | 'public').
 
-        Повторяет GET-ссылку с карточки (confirm там только на JS-стороне)."""
+        Повторяет кнопку карточки: POST .../<uid>/variants/move_to_<scope>/."""
         scope = (scope or "").strip().lower()
         if scope not in ("private", "public"):
             raise ValueError(f"scope должен быть 'private' или 'public', а не {scope!r}")
         uid = uid.strip("/").split("/")[-1]
-        next_path = f"{TASKS_PATH}{uid}/"
-        self._get(f"{TASKS_PATH}{uid}/variants/move-to-{scope}/?next={quote(next_path)}")
+        self._post_api(f"{TASKS_API_PATH}{uid}/variants/move_to_{scope}/", {})
         log.info("Задача %s: варианты перемещены в %s group", uid, scope)
 
     def submit_review(self, uid: str) -> TaskDetail:
@@ -531,111 +577,114 @@ class AdRobotClient:
         return tail.lstrip(":").strip()
 
     @staticmethod
-    def _value_text(node) -> str:
-        """Текст из .detail-value с сохранением переносов строк (<br>)."""
-        for br in node.find_all("br"):
-            br.replace_with("\n")
-        raw = node.get_text("\n")
-        lines = [re.sub(r"\s+", " ", ln).strip() for ln in raw.split("\n")]
+    def _clean_text(value) -> str:
+        """Текст из API: \r\n → \n, пробелы схлопнуты, пустые строки убраны."""
+        lines = [re.sub(r"[ \t]+", " ", ln).strip()
+                 for ln in str(value or "").replace("\r", "").split("\n")]
         return "\n".join(ln for ln in lines if ln)
 
-    def _parse_detail(self, html: str) -> TaskDetail:
-        soup = BeautifulSoup(html, "html.parser")
-        detail = TaskDetail(uid="", url="")
+    @staticmethod
+    def _fmt_time(value: Optional[str]) -> str:
+        """ISO из API → «02 Oct 22:25» (как раньше в карточке/ленте)."""
+        dt = _parse_iso(value)
+        return dt.strftime("%d %b %H:%M") if dt else (value or "")
 
-        title_tag = soup.find("title")
-        if title_tag:
-            t = title_tag.get_text(strip=True)
-            detail.title = re.sub(r"^Lander Task:\s*", "", t)
+    @staticmethod
+    def _fmt_price(price, currency: str) -> str:
+        if price in (None, ""):
+            return ""
+        if isinstance(price, float) and price.is_integer():
+            price = int(price)
+        return " ".join(x for x in (str(price), currency or "") if x)
 
-        # Поля карточки. Подпись лежит в .detail-label или .section-header,
-        # значение — в следующем .detail-value (работает для .detail-field,
-        # .status-section и блока Description с .section-header).
-        def has_cls(el, name):
-            return el.has_attr("class") and name in el["class"]
+    def _parse_detail_json(self, d: dict) -> TaskDetail:
+        """JSON карточки /planning/api/kt_offer_tasks/<uid>/ → TaskDetail.
 
-        targets = soup.find_all(
-            lambda el: el.name == "div"
-            and el.has_attr("class")
-            and any(c in el["class"] for c in
-                    ("detail-label", "section-header", "detail-value"))
-        )
-        last_label = None
-        for el in targets:
-            if has_cls(el, "detail-value"):
-                if last_label:
-                    detail.fields[last_label] = self._value_text(el)
-                    last_label = None
-            else:  # detail-label / section-header
-                last_label = el.get_text(" ", strip=True)
+        Поля приводим к подписям старой серверной карточки («Offer»,
+        «Reference lander», «Lander price»…) — на них завязаны session.py,
+        task_intake.py и фронт (TasksPage/TaskDetailsModal/NewSessionPage).
+        """
+        detail = TaskDetail(uid=d.get("uuid") or "", url=d.get("web_url") or "")
+        group = d.get("kt_offer_group") or {}
+        ref = d.get("kt_offer") or {}
+        created = _parse_iso(d.get("created_at"))
+        deadline = _parse_iso(d.get("deadline"))
 
-        # Доступные действия (кнопки статуса), напр. "Start working" / "Need details"
-        for b in soup.select(
-            ".status-buttons button, .status-buttons a, "
-            ".status-buttons input[type=submit]"
-        ):
-            label = b.get_text(" ", strip=True) or b.get("value", "")
-            if label:
-                detail.actions.append(label.strip())
+        # Заголовок как у <title> старой карточки и в списке: «04.10 DI GlucoZen CO».
+        detail.title = " ".join(
+            x for x in (created.strftime("%d.%m") if created else "",
+                        group.get("name") or "") if x)
 
-        # Варианты: .variant-card
-        for v in soup.select(".variant-card"):
-            txt = re.sub(r"\s+", " ", v.get_text(" ", strip=True)).strip()
+        audience = " ".join(x for x in (
+            group.get("gender") or "",
+            f"{group['minimum_age']}+" if group.get("minimum_age") else "") if x)
+        ref_text = ""
+        if ref.get("name"):
+            ref_text = ref["name"]
+            if ref.get("kt_id") and f"(ID: {ref['kt_id']})" not in ref_text:
+                ref_text += f" (ID: {ref['kt_id']})"
+        f = {
+            "Created by": d.get("created_by") or "",
+            "Offer": group.get("name") or "",
+            "Reference lander": ref_text,
+            "Category": d.get("request_category_display") or d.get("request_category") or "",
+            "Target audience": audience,
+            "Lander price": self._fmt_price(group.get("lander_price"), group.get("currency") or ""),
+            "Promotions": self._clean_text(group.get("promotions")),
+            "Comments": self._clean_text(group.get("comments")),
+            "Status": d.get("status") or "",
+            "Assigned to": d.get("assigned_to") or "",
+            "Preferred assignees": ", ".join(d.get("preferred_assignees") or []),
+            "Deadline": deadline.strftime("%d.%m.%Y") if deadline else "",
+            "Description": self._clean_text(d.get("description")),
+        }
+        detail.fields = {k: v for k, v in f.items() if v}
+
+        # Доступные кнопки статуса: «Start working», «Need details», «Submit for review»…
+        for t in d.get("possible_status_transitions") or []:
+            code = (t.get("status") or "").upper()
+            if code:
+                detail.transitions[code] = t.get("label") or code
+                detail.actions.append(t.get("label") or code)
+
+        for v in d.get("variants") or []:
+            o = v.get("kt_offer") or {}
+            txt = o.get("name") or (str(o["kt_id"]) if o.get("kt_id") else "")
             if txt:
-                detail.variants.append(txt)
+                detail.variants.append(txt + (" · ACCEPTED" if v.get("accepted") else ""))
 
-        # активность: .event-item
-        for ev in soup.select(".event-item"):
-            author_el = ev.select_one(".event-author")
-            time_el = ev.select_one(".event-time")
-            author = author_el.get_text(" ", strip=True) if author_el else ""
-            ev_time = time_el.get_text(" ", strip=True) if time_el else ""
-            status_badge = ev.select_one(".event-status-badge")
-            comment_el = ev.select_one(".event-comment, .event-text, .event-body")
-            if status_badge:
-                text = f"сменил статус на {status_badge.get_text(strip=True)}"
-            elif comment_el:
-                text = comment_el.get_text(" ", strip=True)
+        # Лента событий (свежие сверху, как отдаёт API).
+        for ev in d.get("events") or []:
+            etype = (ev.get("event_type") or "").upper()
+            author = ev.get("user_username") or ""
+            ev_time = self._fmt_time(ev.get("created_at"))
+            content = self._clean_text(ev.get("content"))
+            att_url = (ev.get("attachment_url") or "").strip()
+            if etype == "STATUS_CHANGE":
+                text = f"сменил статус на {content}"
+            elif etype == "COMMENT":
+                text = content or ("[вложение]" if att_url else "")
             else:
-                sys_text = ev.select_one(".event-system-text")
-                text = sys_text.get_text(" ", strip=True) if sys_text else \
-                    re.sub(r"\s+", " ", ev.get_text(" ", strip=True))
-                if author:
-                    text = text.replace(author, "", 1).strip()
+                text = ": ".join(x for x in (etype.lower().replace("_", " "), content) if x)
             detail.activity.append({"author": author, "time": ev_time, "text": text})
 
-        # Комментарии с вложениями: .event-item.event-comment
-        for ev in soup.select(".event-item.event-comment"):
-            author_el = ev.select_one(".event-author")
-            time_el = ev.select_one(".event-time")
-            text_el = ev.select_one(".comment-text")
-            comment = Comment(
-                author=author_el.get_text(" ", strip=True) if author_el else "",
-                time=time_el.get_text(" ", strip=True) if time_el else "",
-                text=text_el.get_text(" ", strip=True) if text_el else "",
-            )
-            for a in ev.select(".comment-attachment a[href]"):
-                href = a.get("href", "").strip()
-                if not href:
+            if etype != "COMMENT":
+                continue
+            comment = Comment(author=author, time=ev_time, text=content)
+            urls = ([att_url] if att_url else []) + [
+                m.group(0).rstrip(".,);]")
+                for m in re.finditer(r"https?://[^\s<>\"')]+", content)]
+            for href in urls:
+                if any(x.url == href for x in comment.attachments):
                     continue
                 att = CommentAttachment(
                     url=href,
-                    filename=self._attachment_filename(href, a),
-                    kind=self._attachment_kind(href),
+                    filename=self._attachment_filename(href),
+                    kind=("image" if href == att_url and ev.get("file_type") == "IMAGE"
+                          else self._attachment_kind(href)),
                 )
                 comment.attachments.append(att)
                 detail.attachments.append(att)
-            # Также подхватим ссылки прямо в тексте комментария (напр. Google Drive).
-            for a in ev.select(".comment-text a[href]"):
-                href = a.get("href", "").strip()
-                if href and not any(x.url == href for x in comment.attachments):
-                    att = CommentAttachment(
-                        url=href,
-                        filename=self._attachment_filename(href, a),
-                        kind=self._attachment_kind(href),
-                    )
-                    comment.attachments.append(att)
-                    detail.attachments.append(att)
             if comment.text or comment.attachments:
                 detail.comments.append(comment)
 
@@ -656,7 +705,6 @@ class AdRobotClient:
         texts = [desc] + [c.text for c in detail.comments if c.text]
         for url in self._extract_site_urls(" \n".join(texts)):
             if not any(a.url == url for a in detail.attachments):
-                from urllib.parse import urlparse
                 host = urlparse(url).hostname or url
                 detail.attachments.append(CommentAttachment(
                     url=url, filename=host, kind="site"))

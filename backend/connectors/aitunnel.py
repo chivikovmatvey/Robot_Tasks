@@ -13,10 +13,17 @@ from __future__ import annotations
 
 import logging
 import os
+import socket
+import ssl
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
+from urllib.parse import urlsplit, urlunsplit
 
 import requests
+from requests.adapters import HTTPAdapter
+from requests.utils import select_proxy
 
 log = logging.getLogger("aitunnel")
 
@@ -125,6 +132,148 @@ def available_models() -> list[dict]:
     return out
 
 
+# ── обход «полумёртвых» IP Cloudflare ────────────────────────────
+# api.aitunnel.ru живёт за Cloudflare и резолвится в НЕСКОЛЬКО IP. С сети
+# пользователя часть подсетей Cloudflare режется DPI: TCP-коннект проходит,
+# а TLS-handshake молча висит (2026-09: 104.21.64.27 — висит, 172.67.175.12 —
+# отвечает за 0.2с). requests/urllib3 берут первый IP, до которого прошёл
+# TCP → запрос зависал на весь timeout (180с) × NET_RETRIES, при этом «иногда»
+# работало, когда DNS отдавал живой IP первым. Лечим сами: параллельно
+# пробуем TLS до каждого IP, пиним самый быстрый живой на _EP_TTL, при
+# сетевом сбое пин сбрасываем. Curl-аналог: --resolve host:443:<ip>.
+CONNECT_TIMEOUT = float(os.getenv("AITUNNEL_CONNECT_TIMEOUT", "15") or 15)
+PROBE_TIMEOUT = float(os.getenv("AITUNNEL_PROBE_TIMEOUT", "3") or 3)
+_EP_TTL = 600.0  # сек — как долго верить выбранному IP
+_ep_cache: dict[str, dict] = {}  # host → {"ts", "ip", "probe"}
+_ep_lock = threading.Lock()
+_probe_lock = threading.Lock()
+_SSL_CTX = ssl.create_default_context()
+
+
+def _probe_tls(host: str, ip: str, port: int = 443,
+               timeout: float = PROBE_TIMEOUT) -> Optional[float]:
+    """Полный TLS-handshake до ip с SNI=host. → секунды | None (не прошёл)."""
+    t = time.monotonic()
+    try:
+        with socket.create_connection((ip, port), timeout=timeout) as raw:
+            with _SSL_CTX.wrap_socket(raw, server_hostname=host):
+                return time.monotonic() - t
+    except OSError:
+        return None
+
+
+def resolve_endpoint(host: str, port: int = 443, force: bool = False) -> Optional[str]:
+    """IP хоста, до которого реально проходит TLS (самый быстрый из живых).
+
+    None — хост не резолвится / один-единственный IP / все мертвы: тогда
+    работаем обычным путём, без пина. Результат кэшируется на _EP_TTL,
+    диагностика последней пробы — в endpoint_info()."""
+    now = time.monotonic()
+    with _ep_lock:
+        c = _ep_cache.get(host)
+        if c and not force and now - c["ts"] < _EP_TTL:
+            return c["ip"]
+    with _probe_lock:  # параллельные батчи перевода: пробует один, остальные ждут
+        with _ep_lock:
+            c = _ep_cache.get(host)
+            if c and not force and time.monotonic() - c["ts"] < _EP_TTL:
+                return c["ip"]  # сосед уже перепроверил, пока мы ждали
+        return _resolve_endpoint_uncached(host, port, time.monotonic())
+
+
+def _resolve_endpoint_uncached(host: str, port: int, now: float) -> Optional[str]:
+    try:
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except socket.gaierror as e:
+        log.warning("AITUNNEL: %s не резолвится: %s", host, e)
+        return None
+    ips: list[str] = []
+    for a in infos:
+        if a[4][0] not in ips:
+            ips.append(a[4][0])
+    probe: dict[str, Optional[float]] = {}
+    ip: Optional[str] = None
+    if len(ips) > 1:
+        # Берём ПЕРВЫЙ ответивший (он же самый быстрый), не дожидаясь, пока
+        # зависшие адреса отвалятся по PROBE_TIMEOUT — иначе каждый пере-
+        # пробинг стоил бы 3с. Незавершённые пробы дорабатывают в фоне.
+        ex = ThreadPoolExecutor(max_workers=len(ips))
+        futs = {ex.submit(_probe_tls, host, i, port): i for i in ips}
+        try:
+            for f in as_completed(futs):
+                probe[futs[f]] = f.result()
+                if ip is None and probe[futs[f]] is not None:
+                    ip = futs[f]
+                    break
+        finally:
+            ex.shutdown(wait=False)
+        pretty = ", ".join(f"{i}={'%.2fс' % t if t is not None else 'висит'}"
+                           for i, t in probe.items())
+        if ip:
+            log.info("AITUNNEL: %s → %s (%s)", host, ip, pretty)
+        else:
+            log.warning("AITUNNEL: до %s не проходит TLS ни по одному IP (%s)", host, pretty)
+    with _ep_lock:
+        _ep_cache[host] = {"ts": now, "ip": ip, "probe": probe, "ips": ips}
+    return ip
+
+
+def reset_endpoint(host: str) -> None:
+    """Сбросить пин (после сетевого сбоя — следующий запрос перепроверит IP)."""
+    with _ep_lock:
+        _ep_cache.pop(host, None)
+
+
+def endpoint_info(host: Optional[str] = None) -> dict:
+    """Диагностика для /api/ai/status: какой IP выбран и как прошли пробы."""
+    host = host or urlsplit(DEFAULT_BASE_URL).hostname or ""
+    with _ep_lock:
+        c = _ep_cache.get(host)
+    if not c:
+        return {"host": host, "ip": None, "probe": {}}
+    return {"host": host, "ip": c["ip"], "probe": dict(c["probe"]),
+            "age_s": round(time.monotonic() - c["ts"])}
+
+
+class _PinnedAdapter(HTTPAdapter):
+    """Транспорт для одного хоста: TCP идёт на проверенный IP, а SNI, Host
+    и проверка сертификата — по настоящему имени (как curl --resolve)."""
+
+    def __init__(self, host: str, port: int = 443, **kw):
+        self._host = host
+        self._port = port
+        super().__init__(**kw)
+
+    def init_poolmanager(self, *args, **kwargs):
+        kwargs["server_hostname"] = self._host  # SNI + сверка сертификата
+        super().init_poolmanager(*args, **kwargs)
+
+    def send(self, request, **kwargs):
+        u = urlsplit(request.url)
+        # NB: kwargs['proxies'] нельзя проверять на пустоту — requests собирает
+        # его из ЛЮБЫХ переменных *_PROXY (KEITARO_PROXY → {'keitaro': …}).
+        via_proxy = select_proxy(request.url, kwargs.get("proxies") or {})
+        if u.hostname == self._host and not via_proxy:
+            ip = resolve_endpoint(self._host, u.port or self._port)
+            if ip:
+                hostpart = f"[{ip}]" if ":" in ip else ip
+                netloc = hostpart + (f":{u.port}" if u.port else "")
+                request.url = urlunsplit((u.scheme, netloc, u.path, u.query, u.fragment))
+                request.headers["Host"] = self._host + (f":{u.port}" if u.port else "")
+        return super().send(request, **kwargs)
+
+
+def _make_session(base_url: str, headers: dict) -> requests.Session:
+    """Сессия с пином IP для хоста base_url (только для https-облака;
+    локальный http-сервер и прочие хосты идут как обычно)."""
+    sess = requests.Session()
+    sess.headers.update(headers)
+    u = urlsplit(base_url)
+    if u.scheme == "https" and u.hostname:
+        sess.mount(f"https://{u.netloc}", _PinnedAdapter(u.hostname, u.port or 443))
+    return sess
+
+
 class AITunnelError(RuntimeError):
     pass
 
@@ -147,10 +296,13 @@ class AITunnelClient:
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.timeout = timeout
-        self.session = requests.Session()
-        self.session.headers.update({
+        self.session = _make_session(self.base_url, {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
+        })
+        # для multipart (images/edits) — без Content-Type: json, но с тем же пином IP
+        self._raw_session = _make_session(self.base_url, {
+            "Authorization": f"Bearer {api_key}",
         })
 
     def _route(self, model: Optional[str]) -> tuple[str, str]:
@@ -161,12 +313,18 @@ class AITunnelClient:
             return mdl[len(LOCAL_PREFIX):], local_base_url()
         return mdl, self.base_url
 
-    def _timeout_for(self, api_base: str) -> int:
-        """Локальная модель на слабом GPU долго прожёвывает длинный промпт
-        (первый запрос ещё и грузит веса в VRAM) — таймаут щедрее облачного."""
+    def _timeout_for(self, api_base: str) -> tuple[float, float]:
+        """(connect, read). Локальная модель на слабом GPU долго прожёвывает
+        длинный промпт (первый запрос ещё и грузит веса в VRAM) — read щедрее
+        облачного. Connect короткий: зависший TLS не должен съедать весь read."""
         if api_base == local_base_url():
-            return int(os.getenv("LOCAL_LLM_TIMEOUT", "600") or "600")
-        return self.timeout
+            return (CONNECT_TIMEOUT, float(os.getenv("LOCAL_LLM_TIMEOUT", "600") or "600"))
+        return (CONNECT_TIMEOUT, float(self.timeout))
+
+    def _on_net_error(self, api_base: str) -> None:
+        """Сетевой сбой к облаку → сбросить пин IP, следующая попытка перепроверит."""
+        if api_base != local_base_url():
+            reset_endpoint(urlsplit(api_base).hostname or "")
 
     @staticmethod
     def _tune_local(payload: dict, api_base: str) -> None:
@@ -219,6 +377,7 @@ class AITunnelClient:
                 break
             except requests.RequestException as e:
                 last_err = e
+                self._on_net_error(api_base)
                 if attempt < NET_RETRIES - 1 and _is_transient(e):
                     log.warning("AITUNNEL транзиентный сбой (попытка %d/%d): %s",
                                 attempt + 1, NET_RETRIES, e)
@@ -283,6 +442,7 @@ class AITunnelClient:
                 break
             except requests.RequestException as e:
                 last_err = e
+                self._on_net_error(api_base)
                 if attempt < NET_RETRIES - 1 and _is_transient(e):
                     log.warning("AITUNNEL(stream) транзиентный сбой (попытка %d/%d): %s",
                                 attempt + 1, NET_RETRIES, e)
@@ -337,7 +497,7 @@ class AITunnelClient:
     ) -> bytes:
         """Редактирует изображение по промпту (/v1/images/edits). → PNG-байты.
 
-        multipart-запрос (НЕ через self.session — там Content-Type json).
+        multipart-запрос через _raw_session (в self.session Content-Type json).
         mime — обязателен корректный (image/png|jpeg|webp), иначе API 400.
         extra_images — доп. референсы [(bytes, filename, mime), …]: тогда все
         изображения передаются как image[] (gpt-image поддерживает несколько
@@ -353,11 +513,22 @@ class AITunnelClient:
             files = [("image[]", (fn, b, mt)) for (b, fn, mt) in all_imgs]
         data = {"model": model, "prompt": prompt, "size": size,
                 "n": "1", "quality": quality}
-        headers = {"Authorization": f"Bearer {self.api_key}"}
-        try:
-            r = requests.post(url, headers=headers, files=files, data=data, timeout=timeout)
-        except requests.RequestException as e:
-            raise AITunnelError(f"Сеть AITUNNEL (image edit): {e}") from e
+        r = None
+        for attempt in range(NET_RETRIES):
+            try:
+                r = self._raw_session.post(url, files=files, data=data,
+                                           timeout=(CONNECT_TIMEOUT, float(timeout)))
+                break
+            except requests.RequestException as e:
+                self._on_net_error(self.base_url)
+                if attempt < NET_RETRIES - 1 and _is_transient(e):
+                    log.warning("AITUNNEL(image) транзиентный сбой (попытка %d/%d): %s",
+                                attempt + 1, NET_RETRIES, e)
+                    time.sleep(RETRY_BACKOFF * (attempt + 1))
+                    continue
+                raise AITunnelError(f"Сеть AITUNNEL (image edit): {e}") from e
+        if r is None:
+            raise AITunnelError("Сеть AITUNNEL (image edit): попытки исчерпаны")
         if r.status_code == 401:
             raise AITunnelAuthError("Неверный AITUNNEL_API_KEY (401)")
         if not r.ok:
@@ -378,7 +549,7 @@ class AITunnelClient:
     # ── баланс / модели (диагностика) ────────────────────────────
     def balance(self) -> Optional[float]:
         try:
-            r = self.session.get(f"{self.base_url}/aitunnel/balance", timeout=30)
+            r = self.session.get(f"{self.base_url}/aitunnel/balance", timeout=(CONNECT_TIMEOUT, 30))
             if r.ok:
                 return r.json().get("balance")
         except Exception:  # noqa: BLE001
@@ -388,7 +559,7 @@ class AITunnelClient:
     def ping(self) -> bool:
         """Лёгкая проверка ключа: запрос баланса (не тратит токены)."""
         try:
-            r = self.session.get(f"{self.base_url}/aitunnel/balance", timeout=30)
+            r = self.session.get(f"{self.base_url}/aitunnel/balance", timeout=(CONNECT_TIMEOUT, 30))
             return r.ok
         except Exception:  # noqa: BLE001
             return False

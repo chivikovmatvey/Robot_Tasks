@@ -291,6 +291,52 @@ _SYS_PROMPT = """\
 """
 
 
+# ── защита названия продукта ─────────────────────────────────────
+# Бренд переводить/транслитерировать нельзя НИКОГДА (в комментариях модель
+# особенно любит «переводить» название). Инструкции в промпте недостаточно,
+# поэтому продукт подменяется макросом-плейсхолдером: макросы маскируются
+# токеном ⟦N⟧ (см. _MASK_PATTERNS) и возвращаются дословно.
+_PRODUCT_PLACEHOLDER = "{product_name}"
+
+
+def _product_pattern(product: str) -> "Optional[re.Pattern[str]]":
+    """Регексп имени продукта: границы слова, любой регистр. None — не искать."""
+    product = (product or "").strip()
+    if len(product) < 3:
+        return None
+    try:
+        from scripts.parser_v2._primitives import word_pattern
+        return word_pattern(product)
+    except Exception:  # noqa: BLE001
+        return re.compile(rf"(?<!\w){re.escape(product)}(?!\w)", re.IGNORECASE)
+
+
+def protect_product(text: str, product: str) -> str:
+    """Название продукта → плейсхолдер (модель его не тронет)."""
+    pat = _product_pattern(product)
+    return pat.sub(_PRODUCT_PLACEHOLDER, text) if pat else text
+
+
+def restore_product(text: str, product: str) -> str:
+    """Плейсхолдер → название продукта (после перевода)."""
+    return text.replace(_PRODUCT_PLACEHOLDER, product) if product else text
+
+
+def lander_product(sid: str, lid: str) -> str:
+    """Название продукта ленда: параметры адаптации → скан (для VSL это
+    pageTitle конфига). Пусто, если определить не удалось."""
+    try:
+        s, ls = get_manager()._get_lander(sid, lid)
+    except Exception:  # noqa: BLE001
+        return ""
+    params = ls.adapt_params or {}
+    for key in ("product_new", "product_old"):
+        v = str(params.get(key) or "").strip()
+        if v:
+            return v
+    return str((ls.scan or {}).get("product") or "").strip()
+
+
 def _parse_translations(content: str) -> Optional[list]:
     """Извлекает массив translations из ответа модели, устойчиво к markdown
     и мусору вокруг JSON. None, если распарсить не удалось."""
@@ -311,12 +357,15 @@ def _parse_translations(content: str) -> Optional[list]:
 
 
 def _translate_one_batch(chunk: list[str], lang_full: str, client, model: str,
-                         geo_hint_text: str = "") -> dict[str, str]:
-    """Переводит один батч блоков. → {original: translated}."""
+                         geo_hint_text: str = "", product: str = "") -> dict[str, str]:
+    """Переводит один батч блоков. → {original: translated}.
+
+    product — название продукта: подменяется плейсхолдером до отправки модели
+    и возвращается после (бренд не переводится и не транслитерируется)."""
     masks: list[dict] = []
     masked_blocks: list[str] = []
     for b in chunk:
-        mb, mp = mask_text(b)
+        mb, mp = mask_text(protect_product(b, product) if product else b)
         masked_blocks.append(mb)
         masks.append(mp)
 
@@ -343,19 +392,19 @@ def _translate_one_batch(chunk: list[str], lang_full: str, client, model: str,
         for tok in mp:
             if tok not in tr:
                 log.warning("Потеряна маска %s в переводе блока %r", tok, orig[:40])
-        out[orig] = unmask_text(tr, mp)
+        out[orig] = restore_product(unmask_text(tr, mp), product)
     return out
 
 
 def _translate_batch_resilient(chunk: list[str], lang_full: str, client, model: str,
-                               geo_hint_text: str = "") -> dict[str, str]:
+                               geo_hint_text: str = "", product: str = "") -> dict[str, str]:
     """Перевод батча, устойчивый к сбоям модели. Раньше упавший батч молча
     терялся целиком (25 блоков оставались без перевода — «перевод затронул не
     весь текст»). Теперь: обрезанный ответ → сразу делим батч пополам; прочие
     ошибки → один повтор, затем деление; одиночный блок не перевёлся → теряем
     ТОЛЬКО его (с warning), остальное переводится."""
     def _once() -> dict[str, str]:
-        return _translate_one_batch(chunk, lang_full, client, model, geo_hint_text)
+        return _translate_one_batch(chunk, lang_full, client, model, geo_hint_text, product)
 
     try:
         return _once()
@@ -370,20 +419,24 @@ def _translate_batch_resilient(chunk: list[str], lang_full: str, client, model: 
             log.warning("Блок не переведён (%s): %r", e1, chunk[0][:60])
             return {}
         mid = len(chunk) // 2
-        out = _translate_batch_resilient(chunk[:mid], lang_full, client, model, geo_hint_text)
-        out.update(_translate_batch_resilient(chunk[mid:], lang_full, client, model, geo_hint_text))
+        out = _translate_batch_resilient(chunk[:mid], lang_full, client, model,
+                                         geo_hint_text, product)
+        out.update(_translate_batch_resilient(chunk[mid:], lang_full, client, model,
+                                              geo_hint_text, product))
         return out
 
 
 def translate_blocks(blocks: list[str], lang: str, client, model: str,
-                     geo: str = "") -> dict[str, str]:
-    """Переводит блоки последовательно (для CLI/агента). → {original: translated}."""
+                     geo: str = "", product: str = "") -> dict[str, str]:
+    """Переводит блоки последовательно (для CLI/агента). → {original: translated}.
+
+    product — название продукта, которое остаётся дословным (бренд)."""
     lang_full = lang_name(lang)
     hint = geo_hint(geo)
     result: dict[str, str] = {}
     for start in range(0, len(blocks), BATCH_SIZE):
         result.update(_translate_batch_resilient(blocks[start:start + BATCH_SIZE],
-                                                 lang_full, client, model, hint))
+                                                 lang_full, client, model, hint, product))
     return result
 
 
@@ -607,6 +660,161 @@ def _vsl_config_info(zip_path: Path) -> Optional[tuple[str, str, dict]]:
         return None
 
 
+# Заголовок VSL переводится ОТДЕЛЬНО от остального текста: фразы подсветки
+# (title.highlightPhrases) обязаны остаться ТОЧНЫМИ подстроками заголовка,
+# иначе на ленде ничего не подсветится. Поэтому заголовок и фразы идут одним
+# запросом, а результат проверяется на вхождение.
+_TITLE_SYS_PROMPT = """\
+Ты — профессиональный переводчик рекламных лендингов. Переведи ЗАГОЛОВОК
+VSL-ленда на ЦЕЛЕВОЙ язык: {lang}. Даже если исходный язык похож на целевой —
+всё равно переведи полностью на {lang}. Сохрани продающий тон и смысл.
+
+ЛОКАЛИЗАЦИЯ ПОД ГЕО:
+{geo_hint}
+
+СТРОГО:
+- Верни ТОЛЬКО JSON: {{"title": "...", "phrases": [...]}}. Ничего лишнего.
+- title — весь заголовок, переведённый на {lang}.
+- phrases — переводы выделяемых фраз, того же размера и в том же порядке, что
+  входной массив phrases. КАЖДАЯ фраза ОБЯЗАНА быть ТОЧНОЙ подстрокой title
+  (символ в символ, тот же регистр и знаки препинания): сначала переведи
+  заголовок, затем выбери из него соответствующие куски.
+- НЕ переводи и сохрани ДОСЛОВНО: токены вида ⟦0⟧ ⟦1⟧, числа, бренды и
+  название продукта, валюты, URL.
+- Имена людей и города адаптируй под целевую страну (блок выше).
+"""
+
+
+def _parse_json_object(content: str) -> Optional[dict]:
+    """JSON-объект из ответа модели, устойчиво к markdown и мусору вокруг."""
+    s = (content or "").strip()
+    if s.startswith("```"):
+        s = re.sub(r"^```[a-zA-Z]*\s*", "", s)
+        s = re.sub(r"\s*```$", "", s).strip()
+    i, j = s.find("{"), s.rfind("}")
+    if i != -1 and j != -1 and j > i:
+        s = s[i:j + 1]
+    try:
+        data = json.loads(s)
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _fit_phrase(title: str, phrase: str) -> Optional[str]:
+    """Кусок title, соответствующий phrase (регистронезависимо) — или None,
+    если модель вернула фразу, которой в заголовке нет."""
+    p = (phrase or "").strip()
+    if not p:
+        return None
+    if p in title:
+        return p
+    i = title.lower().find(p.lower())
+    if i != -1:
+        return title[i:i + len(p)]
+    return None
+
+
+def translate_vsl_title(sid: str, lid: str, *,
+                        target_lang: Optional[str] = None) -> dict:
+    """Переводит ЗАГОЛОВОК VSL-ленда (config.title.text + highlightPhrases).
+
+    Отдельное действие: в общий перевод ленда заголовок не входит (его часто
+    пишут вручную под связку). Фразы подсветки проверяются на вхождение в
+    переведённый заголовок; не совпавшие отбрасываются с предупреждением.
+    """
+    from connectors.aitunnel import client_from_env
+    from services.vsl import read_config, write_config
+
+    client = client_from_env()
+    if client is None:
+        raise ValueError("AITUNNEL не настроен — задай AITUNNEL_API_KEY в .env")
+
+    cfg = read_config(sid, lid)["config"]
+    title_cfg = dict(cfg.get("title") or {})
+    original = (title_cfg.get("text") or "").strip()
+    if not original:
+        raise ValueError("В конфиге нет заголовка (config.title.text пуст)")
+    phrases = [str(p).strip() for p in (title_cfg.get("highlightPhrases") or [])
+               if str(p).strip()]
+
+    lang = (target_lang or target_lang_for(sid, lid)).strip()
+    model = translate_model()
+    hint = geo_hint(target_geo_for(sid, lid)) or \
+        "Гео не задано — имена и города оставь нейтральными."
+
+    product = lander_product(sid, lid)  # бренд в заголовке не переводим
+    masked_title, masks = mask_text(protect_product(original, product))
+    rev = {orig: tok for tok, orig in masks.items()}
+    masked_phrases = []
+    for p in phrases:
+        p = protect_product(p, product)
+        for orig, tok in rev.items():
+            p = p.replace(orig, tok)
+        masked_phrases.append(p)
+
+    messages = [
+        {"role": "system",
+         "content": _TITLE_SYS_PROMPT.format(lang=lang_name(lang), geo_hint=hint)},
+        {"role": "user",
+         "content": json.dumps({"title": masked_title, "phrases": masked_phrases},
+                               ensure_ascii=False)},
+    ]
+
+    data = None
+    for attempt in (1, 2):
+        try:
+            resp = client.chat(messages, model=model, temperature=0.2,
+                               max_tokens=MAX_TOKENS,
+                               response_format={"type": "json_object"})
+            data = _parse_json_object((resp["message"].get("content") or "").strip())
+        except Exception as e:  # noqa: BLE001
+            log.warning("Перевод заголовка VSL, попытка %d: %s", attempt, e)
+            data = None
+        if data and str(data.get("title") or "").strip():
+            break
+
+    warnings: list[str] = []
+    if data and str(data.get("title") or "").strip():
+        new_title = restore_product(unmask_text(str(data["title"]).strip(), masks), product)
+        raw_phrases = data.get("phrases")
+        raw_phrases = raw_phrases if isinstance(raw_phrases, list) else []
+    else:
+        # Фолбэк: обычный батч-перевод одного блока, фразы подберём вхождением.
+        got = translate_blocks([original], lang, client, model,
+                               geo=target_geo_for(sid, lid), product=product)
+        new_title = (got.get(original) or "").strip()
+        if not new_title or new_title == original:
+            raise ValueError("Модель не вернула перевод заголовка")
+        raw_phrases = []
+        warnings.append("Заголовок переведён запасным способом (модель вернула не-JSON)")
+
+    new_phrases: list[str] = []
+    dropped: list[str] = []
+    for i, src in enumerate(phrases):
+        cand = raw_phrases[i] if i < len(raw_phrases) else ""
+        fit = _fit_phrase(new_title,
+                          restore_product(unmask_text(str(cand), masks), product))
+        if fit:
+            new_phrases.append(fit)
+        else:
+            dropped.append(src)
+    if dropped:
+        warnings.append(
+            "Не удалось сопоставить выделенные фразы с переводом (нужно выбрать "
+            "заново вручную): " + ", ".join(f"«{d}»" for d in dropped))
+
+    title_cfg["text"] = new_title
+    title_cfg["highlightPhrases"] = new_phrases
+    cfg["title"] = title_cfg
+    write_config(sid, lid, cfg)
+    log.info("VSL-заголовок %s/%s переведён на %s (фраз: %d/%d)",
+             sid, lid, lang, len(new_phrases), len(phrases))
+    return {"lang": lang, "model": model, "original": original,
+            "translated": new_title, "phrases": new_phrases,
+            "dropped": dropped, "warnings": warnings}
+
+
 def target_lang_for(sid: str, lid: str) -> str:
     """Язык целевого гео ленда (код, напр. 'es'/'ar'/'ur') — из CSV/geos."""
     mgr = get_manager()
@@ -684,7 +892,9 @@ def translate_lander(sid: str, lid: str, *, target_lang: Optional[str] = None,
 
     # 2) Перевести один раз каждый уникальный блок (с локализацией под гео).
     geo = target_geo_for(sid, lid)
-    translations = translate_blocks(list(all_blocks.keys()), lang, client, model, geo)
+    product = lander_product(sid, lid)
+    translations = translate_blocks(list(all_blocks.keys()), lang, client, model,
+                                    geo, product)
 
     # 3) Дифф (только реально изменившиеся).
     diff = []
@@ -733,6 +943,7 @@ def translate_lander_stream(sid: str, lid: str, *, target_lang: Optional[str] = 
         model = translate_model()
         lang_full = lang_name(lang)
         geo_hint_text = geo_hint(target_geo_for(sid, lid))
+        product = lander_product(sid, lid)  # бренд не переводим
 
         with zipfile.ZipFile(zip_path, "r") as zf:
             members = [n for n in zf.namelist() if Path(n).suffix.lower() in TEXT_FILE_EXT]
@@ -774,7 +985,7 @@ def translate_lander_stream(sid: str, lid: str, *, target_lang: Optional[str] = 
         ex = ThreadPoolExecutor(max_workers=5)
         try:
             futs = {ex.submit(_translate_batch_resilient, b, lang_full, client, model,
-                              geo_hint_text): b
+                              geo_hint_text, product): b
                     for b in batches}
             for fut in as_completed(futs):
                 batch = futs[fut]

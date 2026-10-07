@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import shutil
@@ -214,7 +215,6 @@ def ensure_output(sid: str, lid: str) -> Path:
     Все правки VSL идут в копию — исходный шаблон остаётся нетронутым,
     переустановка вернёт эталон."""
     from services.session import LanderStatus
-    from utils.files import output_relative_url
     mgr = _mgr()
     s, ls = mgr._get_lander(sid, lid)
     if ls.output_name:
@@ -226,8 +226,7 @@ def ensure_output(sid: str, lid: str) -> Path:
     OUTPUTS.mkdir(parents=True, exist_ok=True)
     out = OUTPUTS / ("vsl_%s_%s.zip" % (sid, re.sub(r"[^\w.-]", "_", lid)))
     shutil.copy2(ls.zip_path, out)
-    ls.output_name = out.name
-    ls.output_url = output_relative_url(out)
+    mgr.set_output(s, ls, out)
     ls.status = LanderStatus.ADAPTED
     mgr._save(s)
     mgr._snapshot_output(sid, lid, "VSL: рабочая копия шаблона")
@@ -433,18 +432,31 @@ def adapt_config(sid: str, lid: str, params: dict) -> list[str]:
     notes: list[str] = []
 
     # 1) строковые замены (продукт + цены) по всем текстам конфига
-    reps: list[tuple[re.Pattern, str]] = []
+    # reps: (регексп, замена, это_продукт)
+    reps: list[tuple[re.Pattern, str, bool]] = []
     po = (params.get("product_old") or "").strip()
     pn = (params.get("product_new") or "").strip()
-    product_pat = None
-    if po and pn and po.lower() != pn.lower():
+    # Старых имён продукта может быть НЕСКОЛЬКО: подсказка адаптации отстаёт от
+    # конфига (после первой адаптации scan.product = уже новое имя), а в
+    # комментариях/текстах донора живёт своё. Меняем все известные варианты —
+    # иначе старый продукт остаётся в fakeChat.preparedComments.
+    old_names: list[str] = []
+    if pn:
+        scan_product = str(((_mgr()._get_lander(sid, lid)[1].scan) or {}).get("product") or "")
+        for cand in (po, str(cfg.get("pageTitle") or ""), scan_product):
+            cand = (cand or "").strip()
+            if (cand and cand.lower() != pn.lower()
+                    and cand.lower() not in [x.lower() for x in old_names]):
+                old_names.append(cand)
+    if old_names:
         # Тот же режим, что в обычной адаптации: любой регистр, границы слова
         # (иначе «Vita» полезет внутрь «vitaminas»), регистр найденного
         # переносится на новое имя. См. parser_v2/_primitives.
         from scripts.parser_v2._primitives import word_pattern
-        product_pat = word_pattern(po)
-        if product_pat is not None:
-            reps.append((product_pat, pn))
+        for name in old_names:
+            pat = word_pattern(name)
+            if pat is not None:
+                reps.append((pat, pn, True))
     for s_num, s_cur, t_num, t_cur in (
         (params.get("src_price_new_num"), params.get("src_price_new_cur"),
          params.get("price_new_num"), params.get("price_new_cur")),
@@ -455,14 +467,14 @@ def adapt_config(sid: str, lid: str, params: dict) -> list[str]:
         if s_num and t_num and s_num != t_num:
             # голое число с границами; проценты не трогаем (скидка «-50%»)
             reps.append((re.compile(
-                rf"(?<![\w.,-]){re.escape(s_num)}(?![\w%])"), t_num))
+                rf"(?<![\w.,-]){re.escape(s_num)}(?![\w%])"), t_num, False))
     s_cur = (params.get("src_price_new_cur") or "").strip()
     t_cur = (params.get("price_new_cur") or "").strip()
     if s_cur and t_cur and s_cur != t_cur:
         if s_cur.isalpha():
-            reps.append((re.compile(rf"(?<!\w){re.escape(s_cur)}(?!\w)"), t_cur))
+            reps.append((re.compile(rf"(?<!\w){re.escape(s_cur)}(?!\w)"), t_cur, False))
         else:  # символьные валюты ($, S/.) — точная замена
-            reps.append((re.compile(re.escape(s_cur)), t_cur))
+            reps.append((re.compile(re.escape(s_cur)), t_cur, False))
 
     if reps:
         counter = {"n": 0}
@@ -471,8 +483,8 @@ def adapt_config(sid: str, lid: str, params: dict) -> list[str]:
 
         def _apply(sv: str) -> str:
             out = sv
-            for pat, repl in reps:
-                if pat is product_pat:  # продукт — с переносом регистра
+            for pat, repl, is_product in reps:
+                if is_product:  # продукт — с переносом регистра
                     out, k = pat.subn(
                         lambda m, _r=repl: apply_case(m.group(0), _r), out)
                 else:
@@ -480,9 +492,25 @@ def adapt_config(sid: str, lid: str, params: dict) -> list[str]:
                 counter["n"] += k
             return out
 
+        # Комментарии считаем отдельно: старый продукт в fakeChat замечают
+        # позже всего (их часто подставляют из библиотеки чужого ленда).
+        before = json.dumps((cfg.get("fakeChat") or {}).get("preparedComments") or [],
+                            ensure_ascii=False)
         cfg = _walk_strings(cfg, _apply)
+        after = json.dumps((cfg.get("fakeChat") or {}).get("preparedComments") or [],
+                           ensure_ascii=False)
         notes.append(f"VSL config: строковых замен {counter['n']} "
                      f"(продукт/цены в текстах)")
+        if old_names:
+            notes.append("VSL config: старые имена продукта в замене — "
+                         + ", ".join(old_names))
+            if before != after:
+                notes.append("VSL config: продукт заменён и в комментариях чата")
+            left = [n for n in old_names
+                    if re.search(rf"(?<!\w){re.escape(n)}(?!\w)", after, re.I)]
+            if left:
+                notes.append("VSL config: в комментариях остались упоминания "
+                             + ", ".join(left) + " — проверь вручную")
 
     # 2) структурные поля — поверх строковых замен
     if pn:
@@ -549,6 +577,59 @@ def adapt_config(sid: str, lid: str, params: dict) -> list[str]:
     notes.append("VSL: тексты конфига остаются на языке ДОНОРА — для смены языка "
                  "нажми «Перевод» (переведёт и config.php)")
     return notes
+
+
+# Флаг «конфиг уже подтянут под задачу/группу» (в adapt_params ленда).
+SYNC_FLAG = "vsl_config_synced"
+
+
+def sync_config(sid: str, lid: str, *, force: bool = False) -> dict:
+    """Подтягивает в config.php актуальные данные ЗАДАЧИ и ГРУППЫ (продукт,
+    цены ×2, гео/язык, exclude_word, скидка), чтобы панель VSL сразу показывала
+    новые значения, а не донорские.
+
+    Идемпотентно: делается один раз на ленд (флаг adapt_params[SYNC_FLAG]);
+    смена группы вызывает с force=True. Ручные правки конфига после синка не
+    затираются — повторного прогона не будет.
+    """
+    mgr = _mgr()
+    s, ls = mgr._get_lander(sid, lid)
+    if not getattr(s, "is_vsl", False):
+        return {"synced": False, "reason": "не VSL-сессия"}
+    params = dict(ls.adapt_params or {})
+    if params.get(SYNC_FLAG) and not force:
+        return {"synced": False, "reason": "уже синхронизирован"}
+    if params.get("product_new") and not force:
+        # Ленд уже адаптировали через форму — конфиг актуален, просто помечаем.
+        params[SYNC_FLAG] = True
+        ls.adapt_params = params
+        mgr._save(s)
+        return {"synced": False, "reason": "ленд уже адаптирован"}
+
+    suggested = mgr.suggest_adapt_params(sid, lid)
+    if not (suggested.get("product_new") or "").strip() and \
+       not (suggested.get("price_new") or "").strip():
+        # Нет ни группы, ни цены — синкать нечем, попробуем в следующий раз.
+        return {"synced": False, "reason": "нет данных задачи/группы"}
+    notes = adapt_config(sid, lid, suggested)
+    try:
+        refresh_scan(sid, lid)
+    except Exception:  # noqa: BLE001
+        log.exception("VSL-скан %s/%s после синка не пересчитался", sid, lid)
+    params[SYNC_FLAG] = True
+    ls.adapt_params = params
+    # Заметки — в лог ленда, чтобы было видно, что и откуда подставлено.
+    ls.adapt_log = (ls.adapt_log or []) + [
+        {"text": "Конфиг подтянут под задачу/группу: " + (suggested.get("group") or "—"),
+         "level": "info"}] + [{"text": n, "level": "info"} for n in notes]
+    mgr._save(s)
+    log.info("VSL %s/%s: конфиг подтянут под задачу/группу (%s)",
+             sid, lid, suggested.get("group") or "без группы")
+    return {"synced": True, "notes": notes,
+            "product": suggested.get("product_new", ""),
+            "price_new": suggested.get("price_new", ""),
+            "price_old": suggested.get("price_old", ""),
+            "geo": suggested.get("geo_id", "")}
 
 
 def _discount_percent(price_new: str, price_old: str) -> Optional[int]:
@@ -672,71 +753,123 @@ def _patch_index_php(sid: str, lid: str) -> list[str]:
 
 
 # ── перевод строк конфига (вызывается из services.translate) ────
-# Ключи, значения которых переводить нельзя: пути к файлам, коды стран/языков.
+# Видимый текст VSL-ленда почти весь живёт в $config: форма заказа (промо-
+# заголовок, дефицит, таймер, плейсхолдеры, кнопка, дисклеймер), уведомления-
+# предупреждения, подписи чата и реакций, футер, оверлей видео. Ключи у разных
+# доноров называются ПО-РАЗНОМУ, поэтому белого списка ключей мало (новый
+# ключ = непереведённый текст на ленде). Переводим ВСЁ, что похоже на текст
+# для пользователя, и вычитаем:
+#   • техсекции конфига (settings/backfix/аналитика) — там адреса, sub_id, utm;
+#   • технические ключи-листья (пути к медиа, цены, валюта, коды стран/языков);
+#   • значения-не-тексты (URL, файлы, чистые макросы, id, числа, цвета).
+# Заголовок (title) и комментарии (fakeChat.preparedComments) переводятся
+# ОТДЕЛЬНЫМИ действиями — см. services.translate.translate_vsl_title и
+# services.vsl_comments.translate_comments — и в общий проход не попадают
+# (флаги include_title / include_comments).
 _CFG_PATHY_RE = re.compile(
     r"\.(png|jpe?g|webp|gif|svg|ico|css|js|php|json|m3u8|mp4|woff2?)$", re.I)
 
-# Перевод конфига VSL-ленда — ТОЛЬКО параметры, относящиеся к показу текста на
-# странице (заголовок, тексты формы, уведомления, подписи UI). Сам конфиг
-# (settings/backfix и пр.) и скрипты не переводятся; комментарии тоже не
-# трогаем здесь — они переводятся отдельно и только применённые к ленду
-# (см. services/vsl_comments.translate_comments).
+# Секции конфига без пользовательского текста (настройки, скрипты, метрики).
+_CFG_BLOCK_SECTIONS = {"settings", "backfix", "analytics", "pixels", "macros"}
 
-# Секции конфига, ВСЕ строковые значения которых — видимый текст страницы.
-_CFG_TEXT_SECTIONS = {"notifications", "title", "footer", "reactions"}
-
-# Отдельные ключи-листья с видимым текстом (в любой секции, кроме
-# заблокированных ниже). Сравнение по нижнему регистру.
-_CFG_TEXT_KEYS = {
-    "overlaytext", "urgencytext", "stockupdatetext", "discounttext",
-    "timerlabel", "nameplaceholder", "nameexample", "phoneexample",
-    "submitbuttontext", "disclaimertext", "headertext", "defaultusername",
-    "commentplaceholder", "commentstitle", "liketext", "replytext",
-    "loginmessage", "copyrighttext", "title", "text",
+# Ключи-листья с техническим значением в ЛЮБОЙ секции: пути к медиа, цены,
+# коды, адреса, оформление. Сравнение по нижнему регистру, только последний
+# ключ пути (секцию `video` целиком блокировать нельзя — там overlayText).
+_CFG_BLOCK_KEYS = {
+    "pagetitle", "product", "productname", "brand", "sitename",
+    "src", "poster", "imagesrc", "image", "productimage", "avatar", "icon",
+    "logo", "favicon", "url", "href", "link", "endpoint", "host", "apihost",
+    "domain", "custombacklink", "keitarohost", "leadendpoint", "thxpage",
+    "oldprice", "newprice", "price", "currency", "country", "language",
+    "locale", "lang", "excludeword", "alias", "class", "classname", "id",
+    "color", "background", "font", "token", "key", "type", "mode", "format",
+    "target", "event", "selector", "version",
 }
 
-# Секции/поддеревья, которые НЕ переводятся вообще: конфиг и скрипты
-# (settings, backfix) и комментарии (preparedComments — переводятся отдельно).
-_CFG_BLOCK_SECTIONS = {"settings", "backfix", "preparedcomments"}
+# Значения-слова, которые выглядят как текст, но являются кодами/настройками.
+_CFG_TECH_WORDS = {
+    "main", "auto", "none", "left", "right", "center", "top", "bottom",
+    "self", "blank", "phone", "email", "name", "text", "submit", "button",
+    "hidden", "default", "true", "false", "null", "inherit", "fixed",
+}
+
+# Вид строки конфига: что с ней делать при переводе.
+CFG_KIND_TEXT = "text"          # видимый текст — общий проход перевода
+CFG_KIND_TITLE = "title"        # заголовок ленда — отдельное действие
+CFG_KIND_COMMENTS = "comments"  # комментарии чата — отдельное действие
+CFG_KIND_BLOCK = "block"        # не переводится никогда
 
 
-def _cfg_key_allowed(path: tuple[str, ...]) -> bool:
-    """Разрешён ли перевод строки по её пути ключей от корня конфига."""
+def _cfg_kind(path: tuple[str, ...]) -> str:
+    """К какой группе относится строка по её пути ключей от корня конфига."""
     if not path:
-        return False
+        return CFG_KIND_BLOCK
     low = [str(p).lower() for p in path]
-    if any(p in _CFG_BLOCK_SECTIONS for p in low):
-        return False
-    if any(p in _CFG_TEXT_SECTIONS for p in low):
-        return True
-    return low[-1] in _CFG_TEXT_KEYS
+    if "preparedcomments" in low:
+        return CFG_KIND_COMMENTS
+    if low[0] == "title":
+        return CFG_KIND_TITLE
+    if low[0] in _CFG_BLOCK_SECTIONS:
+        return CFG_KIND_BLOCK
+    if low[-1] in _CFG_BLOCK_KEYS:
+        return CFG_KIND_BLOCK
+    return CFG_KIND_TEXT
 
 
 def _cfg_value_translatable(val: str) -> bool:
-    """Похоже ли значение на видимый текст (а не URL/путь/код)."""
+    """Похоже ли значение на видимый текст (а не URL/путь/код/макрос)."""
     v = (val or "").strip()
     if len(v) < 2:
         return False
-    if v.startswith(("http://", "https://")) or _CFG_PATHY_RE.search(v):
+    if v.startswith(("http://", "https://", "//", "/", "./", "../")):
         return False
-    if re.fullmatch(r"[A-Z]{2,3}", v):    # коды 'PE'/'ES'/'PEN'
+    if _CFG_PATHY_RE.search(v):
         return False
-    return bool(re.search(r"[^\W\d_]", v))
+    if "/" in v and " " not in v:          # 'avatars/1.jpeg', пути без пробелов
+        return False
+    if re.fullmatch(r"[A-Z]{2,3}", v):     # коды 'PE'/'ES'/'PEN'
+        return False
+    if re.fullmatch(r"#[0-9a-fA-F]{3,8}", v):          # цвета
+        return False
+    if re.fullmatch(r"[\d\s.,:%+×/@—–-]+", v):         # только числа/знаки
+        return False
+    if v.lower() in _CFG_TECH_WORDS:
+        return False
+    if re.fullmatch(r"[a-z][a-z0-9]*([_-][a-z0-9]+)+", v):  # sub_id_10, phone-input
+        return False
+    if re.fullmatch(r"\{[^}]*\}", v):      # чистый макрос '{phone_example}'
+        return False
+    # Буквы должны быть ВНЕ макросов: '{current_domain}/{alias}?p=coin' — не текст.
+    if not re.search(r"[^\W\d_]", re.sub(r"\{[^}]*\}", " ", v)):
+        return False
+    return True
 
 
-def _cfg_translatable(path: tuple[str, ...], val: str) -> bool:
-    return _cfg_key_allowed(path) and _cfg_value_translatable(val)
+def _cfg_translatable(path: tuple[str, ...], val: str, *,
+                      include_title: bool = False,
+                      include_comments: bool = False) -> bool:
+    kind = _cfg_kind(path)
+    if kind == CFG_KIND_BLOCK:
+        return False
+    if kind == CFG_KIND_TITLE and not include_title:
+        return False
+    if kind == CFG_KIND_COMMENTS and not include_comments:
+        return False
+    return _cfg_value_translatable(val)
 
 
-def config_translatable_strings(cfg: dict) -> list[str]:
-    """Переводимые строковые значения конфига — только видимый текст страницы
-    (заголовок, тексты формы, уведомления, подписи UI). Конфиг/скрипты и
-    комментарии не включаются. Уникальные, длинные первыми."""
+def config_translatable_strings(cfg: dict, *, include_title: bool = False,
+                                include_comments: bool = False) -> list[str]:
+    """Переводимые строковые значения конфига — весь видимый текст страницы
+    (форма заказа, уведомления, подписи UI, футер и любые другие текстовые
+    поля донора). Заголовок и комментарии — только по флагам (у них свои
+    действия). Уникальные, длинные первыми."""
     out: dict[str, None] = {}
 
     def walk(val, path: tuple[str, ...] = ()) -> None:
         if isinstance(val, str):
-            if _cfg_translatable(path, val):
+            if _cfg_translatable(path, val, include_title=include_title,
+                                 include_comments=include_comments):
                 out.setdefault(val.strip(), None)
         elif isinstance(val, dict):
             for k, x in val.items():
@@ -749,12 +882,15 @@ def config_translatable_strings(cfg: dict) -> list[str]:
     return sorted(out, key=len, reverse=True)
 
 
-def config_apply_translations(cfg: dict, mapping: dict[str, str]):
+def config_apply_translations(cfg: dict, mapping: dict[str, str], *,
+                              include_title: bool = False,
+                              include_comments: bool = False):
     """Возвращает копию конфига с применённым словарём перевода (те же
     правила обхода, что и при сборе блоков)."""
     def walk(val, path: tuple[str, ...] = ()):
         if isinstance(val, str):
-            if _cfg_translatable(path, val):
+            if _cfg_translatable(path, val, include_title=include_title,
+                                 include_comments=include_comments):
                 tr = mapping.get(val.strip())
                 if tr and tr.strip() and tr.strip() != val.strip():
                     return tr

@@ -231,9 +231,11 @@ function LanderPanel({ sid, lander, isVsl, sessionTasks }: {
       lander.offer_override = next || null;
       // Бэк заодно поискал фото продукта НОВОЙ группы на странице оффера.
       const added = (s as any).photos_added || 0;
-      setGroupPhotosNote(added > 0
+      const vslSynced = (s as any).vsl_config?.synced;
+      setGroupPhotosNote((added > 0
         ? `Найдено фото продукта новой группы: ${added} (в «Загруженные медиа»)`
-        : 'Новых фото продукта для группы не найдено');
+        : 'Новых фото продукта для группы не найдено')
+        + (vslSynced ? ' · config.php пересчитан под новую группу' : ''));
       // Подставляем пересчитанные под новую группу гео/продукт/вертикаль.
       // Цену НЕ трогаем — сохраняем то, что ввёл пользователь вручную.
       setParams((p) => ({
@@ -527,7 +529,9 @@ function LanderPanel({ sid, lander, isVsl, sessionTasks }: {
               <p className="dim small">Жду скачивания ленда…</p>
             ) : isVsl && vslTab === 'config' ? (
               <div>
-                <VslPanel sid={sid} lid={lid} hasOutput={!!lander.output_name}
+                {/* key с группой: смена группы переписывает config.php на сервере
+                    (продукт/цены/гео), панель должна перечитать его заново. */}
+                <VslPanel key={group} sid={sid} lid={lid} hasOutput={!!lander.output_name}
                           onChanged={() => setVersion((v) => v + 1)} />
                 <div style={{ marginTop: '0.8rem', display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
                   {lander.output_name && (
@@ -541,7 +545,7 @@ function LanderPanel({ sid, lander, isVsl, sessionTasks }: {
                   </button>
                 </div>
                 {showTranslate && lander.output_name && (
-                  <TranslatePanel sid={sid} lid={lid} onApplied={() => setVersion((v) => v + 1)} />
+                  <TranslatePanel sid={sid} lid={lid} isVsl={isVsl} onApplied={() => setVersion((v) => v + 1)} />
                 )}
                 {showKeitaro && (
                   <KeitaroUploadPanel sid={sid} lid={lid} lander={lander} onChanged={() => setVersion((v) => v + 1)} />
@@ -666,7 +670,7 @@ function LanderPanel({ sid, lander, isVsl, sessionTasks }: {
               )}
             </div>
             {showTranslate && lander.output_name && (
-              <TranslatePanel sid={sid} lid={lid} onApplied={() => setVersion((v) => v + 1)} />
+              <TranslatePanel sid={sid} lid={lid} isVsl={isVsl} onApplied={() => setVersion((v) => v + 1)} />
             )}
             {showKeitaro && (lander.output_name || lander.status === 'ready') && (
               <KeitaroUploadPanel sid={sid} lid={lid} lander={lander} onChanged={() => setVersion((v) => v + 1)} />
@@ -1732,7 +1736,7 @@ function ChatBubble({ m }: { m: ChatMessage }) {
 }
 
 // Панель перевода ленда: стриминг с живым прогрессом, сразу применяется к ленду.
-function TranslatePanel({ sid, lid, onApplied }: { sid: string; lid: string; onApplied: () => void }) {
+function TranslatePanel({ sid, lid, onApplied, isVsl }: { sid: string; lid: string; onApplied: () => void; isVsl?: boolean }) {
   const [lang, setLang] = useState('');
   const [languages, setLanguages] = useState<{ code: string; name: string }[]>([]);
   const [running, setRunning] = useState(false);
@@ -1797,6 +1801,14 @@ function TranslatePanel({ sid, lid, onApplied }: { sid: string; lid: string; onA
         {running && <span className="dim small">Перевожу… стоп = ленд не изменится</span>}
         {info?.rtl && <span className="dim small">RTL · dir=rtl</span>}
       </div>
+
+      {isVsl && (
+        <div className="dim small" style={{ marginBottom: 8 }}>
+          Переводится весь видимый текст ленда, включая config.php (форма заказа,
+          предупреждения, подписи чата, футер). Заголовок и комментарии — отдельными
+          кнопками во вкладке «Конфиг VSL».
+        </div>
+      )}
 
       {error && <div style={{ padding: '0.5rem 0.7rem', background: 'rgba(245,158,11,0.12)', color: '#f59e0b', borderRadius: 6, fontSize: 12, marginBottom: 8 }}>{error}</div>}
 

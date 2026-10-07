@@ -184,6 +184,7 @@ export interface TaskDetail {
   comments: TaskComment[];
   attachments: CommentAttachment[];
   actions: string[];
+  transitions?: Record<string, string>;  // {код статуса: подпись кнопки}
 }
 
 // Кластер задач на один оффер (кандидат на объединение в одну сессию).
@@ -1009,6 +1010,15 @@ export const api = {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ target_lang: targetLang || null }),
         timeoutMs: 300000, // перевод пачки комментариев через deepseek небыстрый
+      }),
+  vslTitleTranslate: (sid: string, lid: string, targetLang?: string) =>
+    request<{ lang: string; model: string; original: string; translated: string;
+              phrases: string[]; dropped: string[]; warnings: string[] }>(
+      `/api/sessions/${encodeURIComponent(sid)}/landers/${encodeURIComponent(lid)}/vsl/title/translate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target_lang: targetLang || null }),
+        timeoutMs: 180000,
       }),
   vslProductImage: (sid: string, lid: string, file: File) => {
     const fd = new FormData();

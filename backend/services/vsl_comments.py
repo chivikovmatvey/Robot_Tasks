@@ -423,8 +423,12 @@ def translate_comments(sid: str, lid: str,
         for r in c.get("replies") or []:
             _collect(r)
 
+    # Название продукта в комментариях переводить/транслитерировать нельзя —
+    # подменяется плейсхолдером на время перевода (см. translate.protect_product).
+    from services.translate import lander_product
+    product = lander_product(sid, lid) or (cfg.get("pageTitle") or "").strip()
     mapping = translate_blocks(list(blocks), lang, client,
-                               translate_model(), geo=geo)
+                               translate_model(), geo=geo, product=product)
 
     def _apply(c: dict) -> dict:
         c = dict(c)
